@@ -18,7 +18,7 @@ class CliTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(ROOT / "time_plugin.py"), "--database", str(database), "--print-config"],
                                     capture_output=True, text=True, check=True)
             plugin = json.loads(result.stdout)["plugins"][0]
-            self.assertEqual(plugin["args"], [str(ROOT / "time_plugin.py"), "--database", str(database)])
+            self.assertEqual(plugin["args"], [str(ROOT / "time_plugin.py"), "--database", str(database.resolve())])
             self.assertEqual(plugin["bindings"]["open"], "Space = =")
             self.assertFalse(database.exists())
 

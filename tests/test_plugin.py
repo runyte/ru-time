@@ -153,7 +153,7 @@ class PluginTests(unittest.TestCase):
     def test_failed_lease_renewal_pauses_and_is_not_replayed(self):
         key = self.task()
         self.plugin.invoke(self.context("toggle", key))
-        self.plugin.last_renewal = 0
+        self.plugin.last_renewal -= 301
         calls = []
         def refused(lease):
             calls.append(lease)
