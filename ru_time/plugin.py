@@ -16,7 +16,7 @@ COMMANDS = [
     {"name": "open", "alias": "time", "description": "Open time tracker", "context": "workspace"},
     {"name": "add", "alias": "time-add", "description": "Add a task", "context": "workspace"},
     # Tab lists only view commands; no alias keeps `::time-add` the one short name.
-    {"name": "new", "description": "Add a new task", "context": "view"},
+    {"name": "new", "description": "Add task here", "context": "view"},
     {"name": "pause", "alias": "time-pause", "description": "Pause the running timer", "context": "workspace"},
     {"name": "toggle", "alias": "time-toggle", "description": "Start or pause this task", "context": "view", "primary": True},
     {"name": "todo", "alias": "time-todo", "description": "Mark task todo and pause its timer", "context": "view"},

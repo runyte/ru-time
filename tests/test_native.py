@@ -130,7 +130,7 @@ class NativeTests(unittest.TestCase):
                 wait_for(lambda: rows() == [])
                 # Adding from Tab needs no selected row, so it works on an empty list.
                 send(b"\t")
-                send(b"Add a new task\r")
+                send(b"Add task here\r")
                 send(b"Menu task\r")
                 wait_for(lambda: rows() == [("Menu task", "todo")])
                 send(b":plugin-stop time\r")
