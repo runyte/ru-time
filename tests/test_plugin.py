@@ -86,6 +86,12 @@ class PluginTests(unittest.TestCase):
         self.submit(value="New task")
         self.assertEqual(self.plugin.store.snapshot()[0]["title"], "New task")
 
+    def test_new_view_action_adds_without_a_selected_row(self):
+        self.plugin.invoke(self.context("open"))
+        self.plugin.invoke(self.context("new"))
+        self.submit(value="From menu")
+        self.assertEqual([t["title"] for t in self.plugin.store.snapshot()], ["From menu"])
+
     def test_stale_or_multiple_rows_cannot_start_timer(self):
         key = self.task()
         context = self.context("toggle", key)

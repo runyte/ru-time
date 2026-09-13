@@ -77,8 +77,10 @@ the available continuations through Runyte's native key hints.
 | `Space = d` | `::time-delete` | Confirm deletion of the selected task and its time |
 | `Space = n` | `::time-note` | Add or edit the selected task’s note |
 | Enter, over one task | `::time-toggle` | Start or pause that task |
-| Tab, in the task buffer | Native action menu | Status changes, note, rename, delete, recovery, and timer toggle |
+| Tab, in the task buffer | Native action menu | New task, status changes, note, rename, delete, recovery, and timer toggle |
 
+**Add a new task** in the Tab menu runs `::time-new`, the task buffer's entry for
+the same prompt as `Space = a` and `::time-add`; it needs no selected row.
 Status actions are `::time-todo`, `::time-in-progress`, and
 `::time-done`. Rename and recovery are `::time-rename` and
 `::time-recover`. Type `::` to browse plugin commands. These short names are

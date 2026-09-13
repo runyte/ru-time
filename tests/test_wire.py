@@ -119,7 +119,7 @@ class WireTests(unittest.TestCase):
         self.assertEqual(self.registration["required_capabilities"], ["views", "interaction", "activity", "providers", "documents", "jobs"])
         self.assertEqual({c["name"]: c["alias"] for c in self.registration["commands"]},
                          {name: "time" if name == "open" else "time-" + name
-                          for name in ("open", "add", "pause", "toggle", "todo", "in-progress", "done", "rename", "delete", "recover", "note")})
+                          for name in ("open", "add", "new", "pause", "toggle", "todo", "in-progress", "done", "rename", "delete", "recover", "note")})
         self.assertIn("result", self.command("open"))
         key = self.add("Task 猫 with a long title that exceeds thirty-two columns")
         self.assertIn("result", self.command("toggle", row=key))
