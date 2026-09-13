@@ -11,14 +11,15 @@ from .storage import Store, StorageError, default_database, load_export, write_e
 def configuration():
     return {"plugins": [{"id": "time", "enabled": True, "api": "runyte-experimental-2",
                          "executable": sys.executable, "args": [str(Path(__file__).resolve().parents[1] / "time_plugin.py")],
-                         "capabilities": ["views", "interaction", "activity"],
-                         "bindings": {"open": "Space = =", "add": "Space = a", "pause": "Space = p", "delete": "Space = d"}}]}
+                         "capabilities": ["views", "interaction", "activity", "providers", "documents", "jobs"],
+                         "bindings": {"open": "Space = =", "add": "Space = a", "pause": "Space = p", "delete": "Space = d", "note": "Space = n"}}]}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Runyte task timer (Python standard library only)")
     parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Workspace identity (defaults to the plugin working directory)")
     parser.add_argument("--database", type=Path, help="Explicit SQLite path, useful when moving task history")
+    parser.add_argument("--plugin-id", default="time", help="Configured plugin ID (default: time)")
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--print-config", action="store_true", help="Print configuration with paths for this checkout and interpreter")
     actions.add_argument("--print-database", action="store_true", help="Print the resolved database path without creating it")
@@ -29,6 +30,9 @@ def main():
     try:
         if args.print_config:
             config = configuration()
+            config["plugins"][0]["id"] = args.plugin_id
+            if args.plugin_id != "time":
+                config["plugins"][0]["args"] += ["--plugin-id", args.plugin_id]
             if args.database:
                 config["plugins"][0]["args"] += ["--database", str(database)]
             print(json.dumps(config, indent=2))
@@ -47,7 +51,7 @@ def main():
                 store.close()
         else:
             from .plugin import TimePlugin
-            TimePlugin(database).run()
+            TimePlugin(database, plugin_id=args.plugin_id).run()
     except (StorageError, OSError, sqlite3.Error) as error:
         print(f"ru-time: {error}", file=sys.stderr)
         return 1

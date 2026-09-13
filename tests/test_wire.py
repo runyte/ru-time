@@ -79,7 +79,9 @@ class WireTests(unittest.TestCase):
             result = {"surface": self.surface}
         elif method in ("activity.acquire", "activity.renew"):
             result = {"lease": "a:g:1", "title": "Tracking task time", "state": "active", "duration_seconds": 600}
-        elif method in ("pane.show", "activity.release", "event.unsubscribe"):
+        elif method == "resource.open":
+            result = {"job": "j:g:1", "title": "Open note", "state": "running"}
+        elif method in ("pane.show", "activity.release", "event.unsubscribe", "provider.register"):
             result = {}
         else:
             self.fail("Unexpected plugin request: " + method)
@@ -114,10 +116,10 @@ class WireTests(unittest.TestCase):
         return self.model["rows"][-1]["id"]
 
     def test_registration_open_add_track_pause_status_delete_and_restart(self):
-        self.assertEqual(self.registration["required_capabilities"], ["views", "interaction", "activity"])
+        self.assertEqual(self.registration["required_capabilities"], ["views", "interaction", "activity", "providers", "documents", "jobs"])
         self.assertEqual({c["name"]: c["alias"] for c in self.registration["commands"]},
                          {name: "time" if name == "open" else "time-" + name
-                          for name in ("open", "add", "pause", "toggle", "todo", "in-progress", "done", "rename", "delete", "recover")})
+                          for name in ("open", "add", "pause", "toggle", "todo", "in-progress", "done", "rename", "delete", "recover", "note")})
         self.assertIn("result", self.command("open"))
         key = self.add("Task 猫 with a long title that exceeds thirty-two columns")
         self.assertIn("result", self.command("toggle", row=key))
@@ -165,6 +167,25 @@ class WireTests(unittest.TestCase):
         with selectors.DefaultSelector() as selector:
             selector.register(self.child.stdout, selectors.EVENT_READ)
             self.assertEqual(selector.select(0.2), [])
+
+
+    def test_note_provider_saves_multiline_and_empty_text_over_public_wire(self):
+        self.command("open")
+        key = self.add("Note task")
+        self.assertEqual(self.command("note", row=key)["result"], {"job": "j:g:1"})
+        self.assertIn("provider.register", self.requests)
+        context = {"provider": "notes", "key": key, "job": "j:g:2"}
+        version = self.call("resource.stat", **context)["result"]["value"]["version"]
+        for job, text in [("j:g:2", "First line\n猫 second line\n"), ("j:g:3", "")]:
+            context["job"] = job
+            start = self.call("resource.write.begin", **context, mode="conditional", encoding="utf-8", bytes=len(text.encode()), expected_version=version)
+            upload = start["result"]["value"]["upload"]
+            self.call("resource.write.chunk", job=job, upload=upload, offset=0, text=text)
+            result = self.call("resource.write.commit", job=job, upload=upload, mode="conditional", expected_version=version)
+            self.assertEqual(result["result"]["kind"], "write_committed")
+            version = result["result"]["value"]["version"]
+            read = self.call("resource.read", **context, version=version, offset=0, limit=131072)
+            self.assertEqual(read["result"]["value"]["text"], text)
 
 
 if __name__ == "__main__":

@@ -94,6 +94,34 @@ class NativeTests(unittest.TestCase):
                 # Tab's registry-derived action metadata, not only colon dispatch.
                 send(b"Mark task done\r")
                 wait_for(lambda: rows() == [("Native task", "done")])
+                # Notes are native editable provider buffers, with durable
+                # multiline saves and zero-byte deletion.
+                send(b" =n")
+                send(b"iFirst line\rSecond line\x1b")
+                send(b":write\r")
+                def note_text():
+                    with closing(sqlite3.connect(database)) as db:
+                        row = db.execute("SELECT text FROM notes").fetchone()
+                        return row[0] if row else ""
+                wait_for(lambda: "First line" in note_text() and "Second line" in note_text())
+                send(b":buffer-close\r")
+                send(b"::time\r")
+                send(b"ggj")
+                send(b"::time-note\r")
+                send(b"%d")
+                send(b":write\r")
+                wait_for(lambda: note_text() == "")
+                send(b":buffer-close\r")
+                send(b"::time\r")
+                send(b"ggj")
+                send(b"\t")
+                send("Add or edit this task’s note\r".encode())
+                send(b"iMenu note\x1b")
+                send(b":write\r")
+                wait_for(lambda: "Menu note" in note_text())
+                send(b":buffer-close\r")
+                send(b"::time\r")
+                send(b"ggj")
                 send(b"::time-delete\r")
                 send(b"\x1b")
                 self.assertEqual(len(rows()), 1)

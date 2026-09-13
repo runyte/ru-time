@@ -25,6 +25,8 @@ class Host:
             return {"view": "v:1", "revision": str(self.serial)}
         if method == "view.get":
             return {"revision": str(self.serial)}
+        if method == "resource.open":
+            return {"job": "j:1", "title": "Open resource", "state": "running"}
         if method.startswith("ui."):
             return {"surface": "input:1"}
         return {}

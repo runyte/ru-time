@@ -5,7 +5,7 @@ Python application client. `tests/runyte-experimental-2.schema.json` and
 `tests/host_handshake.json` provide the matching public schema and handshake
 fixtures; the latter selects this plugin's capabilities and command name.
 
-Source: https://github.com/runyte/runyte/tree/dd6e4fccc39dadcba2866a211521abb31635ef82/docs/plugins
+Source: https://github.com/runyte/runyte/tree/a8273f65a15cd95bcda245eb80d333beb6b61570/docs/plugins
 
 License: MPL-2.0, retained in the client header and this repository's LICENSE.
 The upstream client was last changed by `f67289c` at that source revision.

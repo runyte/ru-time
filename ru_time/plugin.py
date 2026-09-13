@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendor"))
 from application import Application, PluginError
 from .storage import Store, StorageError, parse_end, utc_text
 
-CAPABILITIES = ["views", "interaction", "activity"]
+CAPABILITIES = ["views", "interaction", "activity", "providers", "documents", "jobs"]
 COMMANDS = [
     {"name": "open", "alias": "time", "description": "Open time tracker", "context": "workspace"},
     {"name": "add", "alias": "time-add", "description": "Add a task", "context": "workspace"},
@@ -21,6 +21,7 @@ COMMANDS = [
     {"name": "in-progress", "alias": "time-in-progress", "description": "Mark task in progress", "context": "view"},
     {"name": "done", "alias": "time-done", "description": "Mark task done and pause its timer", "context": "view"},
     {"name": "rename", "alias": "time-rename", "description": "Rename this task", "context": "view"},
+    {"name": "note", "alias": "time-note", "description": "Add or edit this task’s note", "context": "view"},
     {"name": "delete", "alias": "time-delete", "description": "Delete this task and its recorded time", "context": "view"},
     {"name": "recover", "alias": "time-recover", "description": "Resolve an interrupted time interval", "context": "view"},
 ]
@@ -47,7 +48,7 @@ def task_model(tasks):
 
 
 class TimePlugin:
-    def __init__(self, database, app=None, *, store_factory=Store):
+    def __init__(self, database, app=None, *, store_factory=Store, plugin_id="time"):
         self.app = app or Application("Time", COMMANDS, CAPABILITIES)
         self.database, self.store_factory, self.store = database, store_factory, None
         self.lock = threading.RLock()
@@ -64,6 +65,8 @@ class TimePlugin:
         self.app.handlers = {c["name"]: self.invoke for c in COMMANDS}
         self.app.on_input = self.submitted
         self.app.on_event = self.event
+        from .notes import Notes
+        self.notes = Notes(self.app, self.storage, plugin_id)
 
     def storage(self):
         if self.store is None:
@@ -129,8 +132,9 @@ class TimePlugin:
         if self.pending:
             raise PluginError("busy", "Finish or cancel the current time-tracker prompt")
         if operation == "delete":
+            title = task["title"].encode("utf-8")[:96].decode("utf-8", errors="ignore")
             result = self.app.request("ui.confirm", invocation=context["invocation"], title="Delete task",
-                                      message=f'Delete "{task["title"][:80]}" and all its recorded time?')
+                                      message=f'Delete "{title}" and its recorded time and note?')
         elif operation == "recover":
             result = self.app.request("ui.pick", invocation=context["invocation"], title="Recover interrupted timer",
                                       choices=["Keep last checkpoint", "Set end time"])
@@ -176,6 +180,8 @@ class TimePlugin:
                 else:
                     task = self.selected(context)
                     key = task["id"]
+                    if command == "note":
+                        return self.notes.open(context, key)
                     if command in ("delete", "rename"):
                         self.prompt(context, command, task)
                         return

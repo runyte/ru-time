@@ -44,12 +44,13 @@ plugins:
     executable: /absolute/path/to/python3
     args:
       - /absolute/path/to/ru-time/time_plugin.py
-    capabilities: [views, interaction, activity]
+    capabilities: [views, interaction, activity, providers, documents, jobs]
     bindings:
       open: Space = =
       add: Space = a
       pause: Space = p
       delete: Space = d
+      note: Space = n
 ```
 
 Restart Runyte after changing configuration. An existing persistent session host
@@ -58,7 +59,8 @@ host's previously loaded configuration. A moved checkout requires regenerating
 the configuration paths. The checkout is self-contained, including its Python
 protocol client. It needs no Runyte source checkout beside it.
 
-The only grants are native views, native input, and continuing activity.
+The grants cover native views, input, timer activity, and editable note documents
+with host-owned open/save jobs.
 The program accesses its local database directly as your user; Runyte plugins
 are trusted programs, not sandboxed extensions.
 
@@ -73,8 +75,9 @@ the available continuations through Runyte's native key hints.
 | `Space = a` | `::time-add` | Prompt for a task title, from any document buffer |
 | `Space = p` | `::time-pause` | Pause this workspace's running timer |
 | `Space = d` | `::time-delete` | Confirm deletion of the selected task and its time |
+| `Space = n` | `::time-note` | Add or edit the selected task’s note |
 | Enter, over one task | `::time-toggle` | Start or pause that task |
-| Tab, in the task buffer | Native action menu | Status changes, rename, delete, recovery, and timer toggle |
+| Tab, in the task buffer | Native action menu | Status changes, note, rename, delete, recovery, and timer toggle |
 
 Status actions are `::time-todo`, `::time-in-progress`, and
 `::time-done`. Rename and recovery are `::time-rename` and
@@ -102,8 +105,36 @@ lists and may run timers simultaneously. There is no cross-workspace accounting
 or cloud synchronization in this version.
 
 Deletion requires physical confirmation and removes the task and all its
-intervals. Escape cancels. Task changes are durable database operations; Runyte's
+intervals and saved note. Escape cancels. Task changes are durable database operations; Runyte's
 text undo does not undo them. Export before deleting history you want to retain.
+
+## Task notes
+
+Task titles stay single-line. Select a task and press `Space = n`, run
+`::time-note`, or choose **Add or edit this task’s note** from Tab. The note opens
+in the current pane as an ordinary editable buffer with Markdown highlighting.
+Use normal editing, undo, selections and `:write` (or `:w`) to save. Use
+`:buffer-close` to close the note, then `::time` to return to the task list.
+Reopening an already open note keeps its unsaved edits.
+
+Clear every character and save to delete the note. Whitespace and blank lines
+are content; they are not silently removed. Notes are stored in the SQLite task
+database and included in exports. Each note supports up to 8 MiB of UTF-8 text
+without NUL characters, with 16 MiB of saved notes per database.
+
+Deleting a task also deletes its saved note. An already open buffer keeps its
+text, but saving it cannot recreate the deleted task. Close or copy that buffer
+as needed. After restarting the plugin, open a task note to register its document
+provider again, then use `:reload` to reconnect any previously open note buffers.
+Normal dirty-buffer and conflicting-save protections apply.
+
+This version upgrades databases and exports to version 2. Version 1 databases
+and exports are accepted; older ru-time versions cannot open the upgraded data.
+Existing installations must add `providers`, `documents`, and `jobs` to the
+plugin capabilities and `note: Space = n` to its bindings, then restart Runyte.
+If you use an ID other than `time`, generate configuration with
+`python3 time_plugin.py --plugin-id YOUR_ID --print-config` so note resources use
+the same configured identity.
 
 ## Timer lifetime and recovery
 

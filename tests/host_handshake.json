@@ -73,7 +73,10 @@
     "capabilities": [
       "views",
       "interaction",
-      "activity"
+      "activity",
+      "providers",
+      "documents",
+      "jobs"
     ],
     "limits": {
       "line_bytes": 1048576,

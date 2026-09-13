@@ -13,6 +13,8 @@ import time
 import uuid
 
 STATUSES = ("todo", "in progress", "done")
+MAX_NOTE_BYTES = 8 * 1024 * 1024
+MAX_NOTES_BYTES = 16 * 1024 * 1024
 MAX_TASKS = 1000
 MAX_INTERVALS = 100_000
 MAX_DURATION = 1_000_000_000_000  # milliseconds, about 31 years
@@ -27,6 +29,17 @@ def title_text(value):
             or any(ord(c) < 32 or 127 <= ord(c) <= 159 or c in "\u2028\u2029" for c in value)):
         raise StorageError("Use a nonempty, single-line task title of at most 512 characters")
     return value.strip()
+
+
+def note_text(value):
+    if not isinstance(value, str) or "\0" in value:
+        raise StorageError("Notes must be UTF-8 text without NUL characters")
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeError:
+        raise StorageError("Notes must be valid UTF-8 text") from None
+    if size > MAX_NOTE_BYTES:
+        raise StorageError("Note exceeds 8 MiB")
 
 
 def default_database(workspace):
@@ -71,7 +84,7 @@ class Store:
             self.db.row_factory = sqlite3.Row
             self.db.execute("PRAGMA foreign_keys=ON")
             version = self.db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise StorageError("Unsupported task database version")
             self.db.executescript("""
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -85,7 +98,10 @@ class Store:
                     interrupted INTEGER NOT NULL DEFAULT 0);
                 CREATE UNIQUE INDEX IF NOT EXISTS one_running ON intervals((1)) WHERE end_ms IS NULL;
                 CREATE INDEX IF NOT EXISTS task_intervals ON intervals(task_id);
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS notes (
+                    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                    text TEXT NOT NULL);
+                PRAGMA user_version=2;
             """)
             with self.db:
                 self.db.execute("UPDATE intervals SET end_ms=checkpoint_ms, interrupted=1 WHERE end_ms IS NULL")
@@ -150,6 +166,28 @@ class Store:
             self._task(key)
             self.db.execute("UPDATE tasks SET title=? WHERE id=?", (title, key))
             self.generation += 1
+
+    def note(self, key):
+        with self.lock:
+            task = self._task(key)
+            row = self.db.execute("SELECT text FROM notes WHERE task_id=?", (key,)).fetchone()
+            text = row[0] if row else ""
+            return task["title"], text, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def save_note(self, key, text, expected_version):
+        note_text(text)
+        with self.lock, self.db:
+            _, old, version = self.note(key)
+            if version != expected_version:
+                raise StorageError("Note changed; reload before saving")
+            total = self.db.execute("SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM notes").fetchone()[0]
+            if total - len(old.encode("utf-8")) + len(text.encode("utf-8")) > MAX_NOTES_BYTES:
+                raise StorageError("Task notes exceed the 16 MiB database limit")
+            if text:
+                self.db.execute("INSERT INTO notes VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET text=excluded.text", (key, text))
+            else:
+                self.db.execute("DELETE FROM notes WHERE task_id=?", (key,))
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def toggle(self, key):
         with self.lock:
@@ -224,12 +262,12 @@ class Store:
     def export_data(self):
         with self.lock:
             self.checkpoint()
-            return {"version": 1, "tasks": [dict(r) for r in self.db.execute("SELECT * FROM tasks ORDER BY created_ms,rowid")],
+            return {"version": 2, "notes": [dict(r) for r in self.db.execute("SELECT * FROM notes ORDER BY task_id")], "tasks": [dict(r) for r in self.db.execute("SELECT * FROM tasks ORDER BY created_ms,rowid")],
                     "intervals": [dict(r) for r in self.db.execute("SELECT * FROM intervals ORDER BY start_ms,rowid")]}
 
     def import_data(self, data):
         """Validate everything before one commit; imports never replace existing work."""
-        if not isinstance(data, dict) or set(data) != {"version", "tasks", "intervals"} or type(data["version"]) is not int or data["version"] != 1:
+        if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] not in (1, 2) or set(data) != ({"version", "tasks", "intervals"} | ({"notes"} if data["version"] == 2 else set())):
             raise StorageError("Unsupported export format")
         tasks, intervals = data["tasks"], data["intervals"]
         if not isinstance(tasks, list) or not isinstance(intervals, list) or len(tasks) > MAX_TASKS or len(intervals) > MAX_INTERVALS:
@@ -247,6 +285,21 @@ class Store:
             if task["status"] not in STATUSES or not integer(task["created_ms"]):
                 raise StorageError("Invalid task metadata")
             ids.add(key)
+        notes = data.get("notes", [])
+        if not isinstance(notes, list) or len(notes) > MAX_TASKS:
+            raise StorageError("Invalid notes")
+        note_ids, note_bytes = set(), 0
+        for note in notes:
+            if not isinstance(note, dict) or set(note) != {"task_id", "text"}:
+                raise StorageError("Invalid note record")
+            key = note["task_id"]
+            if not isinstance(key, str) or key not in ids or key in note_ids:
+                raise StorageError("Invalid note task identity")
+            note_text(note["text"])
+            note_ids.add(key)
+            note_bytes += len(note["text"].encode("utf-8"))
+        if note_bytes > MAX_NOTES_BYTES:
+            raise StorageError("Task notes exceed the 16 MiB database limit")
         normalized = []
         for record in intervals:
             if not isinstance(record, dict) or set(record) != {"id", "task_id", "start_ms", "checkpoint_ms", "elapsed_ms", "end_ms", "interrupted"}:
@@ -268,6 +321,7 @@ class Store:
                 raise StorageError("Import requires an empty database; existing tasks were preserved")
             self.db.executemany("INSERT INTO tasks VALUES (:id,:title,:status,:created_ms)", tasks)
             self.db.executemany("INSERT INTO intervals VALUES (:id,:task_id,:start_ms,:checkpoint_ms,:elapsed_ms,:end_ms,:interrupted)", normalized)
+            self.db.executemany("INSERT INTO notes VALUES (:task_id,:text)", [n for n in notes if n["text"]])
             self.generation += 1
 
     def close(self, *, interrupted=False):
@@ -282,9 +336,9 @@ class Store:
 
 def load_export(path):
     with open(path, "rb") as stream:
-        raw = stream.read(64 * 1024 * 1024 + 1)
-    if len(raw) > 64 * 1024 * 1024:
-        raise StorageError("Export exceeds 64 MiB")
+        raw = stream.read(256 * 1024 * 1024 + 1)
+    if len(raw) > 256 * 1024 * 1024:
+        raise StorageError("Export exceeds 256 MiB")
     try:
         return json.loads(raw)
     except (ValueError, UnicodeError, RecursionError):
