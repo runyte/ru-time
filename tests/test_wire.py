@@ -117,8 +117,8 @@ class WireTests(unittest.TestCase):
 
     def test_registration_open_add_track_pause_status_delete_and_restart(self):
         self.assertEqual(self.registration["required_capabilities"], ["views", "interaction", "activity", "providers", "documents", "jobs"])
-        self.assertEqual({c["name"]: c["alias"] for c in self.registration["commands"]},
-                         {name: "time" if name == "open" else "time-" + name
+        self.assertEqual({c["name"]: c.get("alias") for c in self.registration["commands"]},
+                         {name: None if name == "new" else "time" if name == "open" else "time-" + name
                           for name in ("open", "add", "new", "pause", "toggle", "todo", "in-progress", "done", "rename", "delete", "recover", "note")})
         self.assertIn("result", self.command("open"))
         key = self.add("Task 猫 with a long title that exceeds thirty-two columns")

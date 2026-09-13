@@ -79,8 +79,10 @@ the available continuations through Runyte's native key hints.
 | Enter, over one task | `::time-toggle` | Start or pause that task |
 | Tab, in the task buffer | Native action menu | New task, status changes, note, rename, delete, recovery, and timer toggle |
 
-**Add a new task** in the Tab menu runs `::time-new`, the task buffer's entry for
-the same prompt as `Space = a` and `::time-add`; it needs no selected row.
+**Add a new task** in the Tab menu opens the same prompt as `Space = a` and
+`::time-add` and needs no selected row. It is registered as
+`:plugin.time.new` without a short alias, so `::time-add` stays the one short
+name for adding.
 Status actions are `::time-todo`, `::time-in-progress`, and
 `::time-done`. Rename and recovery are `::time-rename` and
 `::time-recover`. Type `::` to browse plugin commands. These short names are
