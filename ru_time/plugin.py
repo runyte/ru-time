@@ -13,16 +13,16 @@ from .storage import Store, StorageError, parse_end, utc_text
 
 CAPABILITIES = ["views", "interaction", "activity"]
 COMMANDS = [
-    {"name": "open", "description": "Open time tracker", "context": "workspace"},
-    {"name": "add", "description": "Add a task", "context": "workspace"},
-    {"name": "pause", "description": "Pause the running timer", "context": "workspace"},
-    {"name": "toggle", "description": "Start or pause this task", "context": "view", "primary": True},
-    {"name": "todo", "description": "Mark task todo and pause its timer", "context": "view"},
-    {"name": "in-progress", "description": "Mark task in progress", "context": "view"},
-    {"name": "done", "description": "Mark task done and pause its timer", "context": "view"},
-    {"name": "rename", "description": "Rename this task", "context": "view"},
-    {"name": "delete", "description": "Delete this task and its recorded time", "context": "view"},
-    {"name": "recover", "description": "Resolve an interrupted time interval", "context": "view"},
+    {"name": "open", "alias": "time", "description": "Open time tracker", "context": "workspace"},
+    {"name": "add", "alias": "time-add", "description": "Add a task", "context": "workspace"},
+    {"name": "pause", "alias": "time-pause", "description": "Pause the running timer", "context": "workspace"},
+    {"name": "toggle", "alias": "time-toggle", "description": "Start or pause this task", "context": "view", "primary": True},
+    {"name": "todo", "alias": "time-todo", "description": "Mark task todo and pause its timer", "context": "view"},
+    {"name": "in-progress", "alias": "time-in-progress", "description": "Mark task in progress", "context": "view"},
+    {"name": "done", "alias": "time-done", "description": "Mark task done and pause its timer", "context": "view"},
+    {"name": "rename", "alias": "time-rename", "description": "Rename this task", "context": "view"},
+    {"name": "delete", "alias": "time-delete", "description": "Delete this task and its recorded time", "context": "view"},
+    {"name": "recover", "alias": "time-recover", "description": "Resolve an interrupted time interval", "context": "view"},
 ]
 
 

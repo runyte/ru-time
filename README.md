@@ -20,8 +20,10 @@ review. Task order stays stable when status or elapsed time changes.
 ## Install
 
 Use a Runyte build supporting `runyte-experimental-2`, native input, viewport
-observations, and activity leases. This API is experimental; compatibility is
-tested against Runyte's source revision recorded in [VENDOR.md](VENDOR.md).
+observations, activity leases, and registered `::` command aliases. This API is
+experimental; compatibility is tested against Runyte's source revision recorded
+in [VENDOR.md](VENDOR.md). Older hosts reject the new alias field, so update
+Runyte before restarting this plugin.
 
 ```sh
 git clone https://github.com/runyte/ru-time.git
@@ -67,18 +69,22 @@ the available continuations through Runyte's native key hints.
 
 | Key | Command | Behavior |
 | --- | --- | --- |
-| `Space = =` | `:plugin.time.open` | Open the retained task buffer in this pane |
-| `Space = a` | `:plugin.time.add` | Prompt for a task title, from any document buffer |
-| `Space = p` | `:plugin.time.pause` | Pause this workspace's running timer |
-| `Space = d` | `:plugin.time.delete` | Confirm deletion of the selected task and its time |
-| Enter, over one task | `:plugin.time.toggle` | Start or pause that task |
+| `Space = =` | `::time` | Open the retained task buffer in this pane |
+| `Space = a` | `::time-add` | Prompt for a task title, from any document buffer |
+| `Space = p` | `::time-pause` | Pause this workspace's running timer |
+| `Space = d` | `::time-delete` | Confirm deletion of the selected task and its time |
+| Enter, over one task | `::time-toggle` | Start or pause that task |
 | Tab, in the task buffer | Native action menu | Status changes, rename, delete, recovery, and timer toggle |
 
-Status actions are `:plugin.time.todo`, `:plugin.time.in-progress`, and
-`:plugin.time.done`. Rename and recovery are `:plugin.time.rename` and
-`:plugin.time.recover`. Commands retain Runyte's `plugin.<id>.` namespace;
-there are no bare `:time` aliases. Bindings are configurable and Runyte refuses
-collisions instead of replacing existing keys. Normal bindings do not intercept
+Status actions are `::time-todo`, `::time-in-progress`, and
+`::time-done`. Rename and recovery are `::time-rename` and
+`::time-recover`. Type `::` to browse plugin commands. These short names are
+registered aliases;
+full names such as `:plugin.time.open` and `:plugin.time.delete` remain valid.
+The configured ID does not change the authored `::time` names. If another plugin
+claims the same alias, Runyte disables that alias for all claimants and reports
+their full commands in `:notifications`. Bindings are configurable and Runyte
+refuses collisions instead of replacing existing keys. Normal bindings do not intercept
 input being sent to an integrated terminal.
 
 Move onto a task row before pressing Enter or invoking a row action. The column

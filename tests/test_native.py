@@ -21,7 +21,7 @@ from ru_time.__main__ import configuration
 
 @unittest.skipUnless(os.environ.get("RUNYTE_BIN"), "Set RUNYTE_BIN for real-editor acceptance")
 class NativeTests(unittest.TestCase):
-    def test_space_prefix_enter_status_menu_pause_and_confirmed_delete(self):
+    def test_short_commands_and_space_pause_with_native_actions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project = root / "project"
@@ -76,9 +76,9 @@ class NativeTests(unittest.TestCase):
                     return db.execute("SELECT COUNT(*) FROM intervals WHERE end_ms IS NULL").fetchone()[0]
             try:
                 drain(1.5)
-                send(b" ==")
+                send(b"::time\r")
                 wait_for(database.exists)
-                send(b" =a")
+                send(b"::time-add\r")
                 send(b"Native task\r")
                 wait_for(lambda: rows() == [("Native task", "todo")])
                 send(b"ggj")
@@ -94,10 +94,10 @@ class NativeTests(unittest.TestCase):
                 # Tab's registry-derived action metadata, not only colon dispatch.
                 send(b"Mark task done\r")
                 wait_for(lambda: rows() == [("Native task", "done")])
-                send(b" =d")
+                send(b"::time-delete\r")
                 send(b"\x1b")
                 self.assertEqual(len(rows()), 1)
-                send(b" =d")
+                send(b"::time-delete\r")
                 send(b"\r")
                 wait_for(lambda: rows() == [])
                 send(b":plugin-stop time\r")
