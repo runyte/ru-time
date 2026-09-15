@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 """Optional real-editor acceptance. Set RUNYTE_BIN to a compatible Runyte build."""
+import codecs
 import errno
 import fcntl
 from contextlib import closing
@@ -16,9 +17,81 @@ import subprocess
 import tempfile
 import termios
 import time
+import unicodedata
 import unittest
 
 from ru_time.__main__ import configuration
+
+
+CONTROL = re.compile(rb"\x1b\[([0-?]*)[ -/]*([@-~])")
+PARTIAL_CONTROL = re.compile(rb"\x1b(\[[0-?]*[ -/]*)?")
+COMPLETED = "(Application command completed)"
+
+
+class Screen:
+    """The character most recently drawn in each cell of the editor's terminal.
+
+    Ratatui writes only the cells that changed since its previous frame, so
+    fresh output cannot show what is on screen: reopening a view that is
+    already visible writes nothing at all. The editor positions every write,
+    so cursor moves and clears are the only controls that change the cells.
+    """
+    def __init__(self, rows, columns):
+        self.rows, self.columns = rows, columns
+        self.cells = [[" "] * columns for _ in range(rows)]
+        self.row = self.column = 0
+        self.pending = b""
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def feed(self, data):
+        # A control sequence or a character may be split across reads.
+        data, self.pending = self.pending + data, b""
+        position = 0
+        while position < len(data):
+            escape = data.find(b"\x1b", position)
+            self.write(self.decoder.decode(data[position:len(data) if escape < 0 else escape]))
+            if escape < 0:
+                break
+            control = CONTROL.match(data, escape)
+            if control is None:
+                if PARTIAL_CONTROL.fullmatch(data, escape):
+                    self.pending = data[escape:]
+                    break
+                position = escape + 2
+                continue
+            self.control(control.group(1), control.group(2))
+            position = control.end()
+
+    def write(self, text):
+        for character in text:
+            if character == "\r":
+                self.column = 0
+            elif character == "\n":
+                self.row = min(self.row + 1, self.rows - 1)
+            elif character >= " ":
+                if self.column < self.columns:
+                    self.cells[self.row][self.column] = character
+                self.column += 2 if unicodedata.east_asian_width(character) in "WF" else 1
+
+    def control(self, parameters, final):
+        # Private modes (cursor visibility, keyboard flags) and colors leave cells alone.
+        if not re.fullmatch(rb"[0-9;]*", parameters):
+            return
+        values = [int(value) if value else 0 for value in parameters.split(b";")]
+        if final in (b"H", b"f"):
+            row, column = (values + [0])[:2]
+            self.row = min(max(row, 1), self.rows) - 1
+            self.column = min(max(column, 1), self.columns) - 1
+        elif final == b"J":
+            start = 0 if values[0] in (2, 3) else self.row * self.columns + self.column
+            for index in range(start, self.rows * self.columns):
+                self.cells[index // self.columns][index % self.columns] = " "
+        elif final == b"K":
+            start = 0 if values[0] == 2 else self.column
+            self.cells[self.row][start:] = [" "] * (self.columns - start)
+
+    def text(self):
+        return "\n".join("".join(row) for row in self.cells)
 
 
 class NativeEditor:
@@ -49,7 +122,7 @@ class NativeEditor:
             self.environment[variable] = str(self.root / name)
         (self.root / "home").mkdir()
         self.output = bytearray()
-        self.child = self.master = None
+        self.child = self.master = self.screen = None
 
     def attach(self):
         self.test.assertIsNone(self.master)
@@ -67,13 +140,17 @@ class NativeEditor:
             os.close(slave)
         self.master = master
         self.output.clear()
+        self.screen = Screen(32, 110)
         self.wait_for(lambda: self.sees(b" NOR "))
 
     def sees(self, text):
         # Strip formatting from the observed output, including escape sequences
         # split across reads. These checks identify fresh, rendered status/command
-        # text; they do not attempt to emulate the editor's terminal screen.
+        # text. Whether something is on screen now is a question for `shows`.
         return text in re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", self.output)
+
+    def shows(self, text):
+        return text in self.screen.text()
 
     def read_output(self, seconds):
         if not select.select([self.master], [], [], seconds)[0]:
@@ -86,6 +163,8 @@ class NativeEditor:
                 raise
             return False
         self.output.extend(chunk)
+        if self.screen is not None:
+            self.screen.feed(chunk)
         del self.output[:-65536]
         return bool(chunk)
 
@@ -106,7 +185,7 @@ class NativeEditor:
             if predicate():
                 return
             self.drain(0.1)
-        self.test.fail(self.output[-8000:].decode(errors="replace"))
+        self.test.fail(self.screen.text() if self.screen is not None else self.output[-8000:].decode(errors="replace"))
 
     def query(self, sql):
         if not self.database.exists():
@@ -131,8 +210,21 @@ class NativeEditor:
         # palette entry first, using only output from this opening of the palette.
         self.output.clear()
         self.send(b"::time")
-        self.wait_for(lambda: self.sees(b"plugin.time.open"))
+        # The palette input replaces the feedback line, so completion drawn
+        # after Enter belongs to this command and not to an earlier one.
+        self.wait_for(lambda: self.sees(b"plugin.time.open") and not self.shows(COMPLETED))
         self.send(b"\r")
+        # A view that is already active redraws nothing when shown again, so
+        # wait for the command to finish rather than for the view alone.
+        self.wait_for(lambda: self.shows("┌ Time · ") and self.shows(COMPLETED))
+
+    def present(self, keys, marker):
+        # The host refuses to show a plugin's view, prompt or document once
+        # later input has changed the foreground. Send nothing else until what
+        # these keys ask for is on screen.
+        self.test.assertFalse(self.shows(marker), self.screen.text())
+        self.send(keys)
+        self.wait_for(lambda: self.shows(marker))
 
     def wait_for_exit(self, timeout=5):
         # Keep the PTY sink active through the final screen/terminal restoration.
@@ -194,16 +286,16 @@ class NativeEditor:
 class NativeTests(unittest.TestCase):
     def test_short_commands_and_space_pause_with_native_actions(self):
         with NativeEditor(self) as editor:
-            drain, send, wait_for = editor.drain, editor.send, editor.wait_for
+            drain, send, wait_for, present = editor.drain, editor.send, editor.wait_for, editor.present
             database, rows, active = editor.database, editor.rows, editor.active
             editor.open_time()
             wait_for(database.exists)
             # Cancel an unanswered native prompt, then prove the next command
             # is admitted instead of leaving the plugin permanently busy.
-            send(b"::time-add\r")
+            present(b"::time-add\r", "┌ Add task ─")
             send(b"Cancelled title\x1b")
             self.assertEqual(rows(), [])
-            send(b"::time-add\r")
+            present(b"::time-add\r", "┌ Add task ─")
             send(b"Native task\r")
             wait_for(lambda: rows() == [("Native task", "todo")])
             send(b"ggj")
@@ -221,7 +313,7 @@ class NativeTests(unittest.TestCase):
             wait_for(lambda: rows() == [("Native task", "done")])
             # Notes are native editable provider buffers, with durable
             # multiline saves and zero-byte deletion.
-            send(b" =n")
+            present(b" =n", "┌ [remote] Note · Native task")
             send(b"iFirst line\rSecond line\x1b")
             send(b":write\r")
             def note_text():
@@ -232,7 +324,7 @@ class NativeTests(unittest.TestCase):
             send(b":buffer-close\r")
             editor.open_time()
             send(b"ggj")
-            send(b"::time-note\r")
+            present(b"::time-note\r", "┌ [remote] Note · Native task")
             send(b"%d")
             send(b":write\r")
             wait_for(lambda: note_text() == "")
@@ -240,7 +332,7 @@ class NativeTests(unittest.TestCase):
             editor.open_time()
             send(b"ggj")
             send(b"\t")
-            send("Add or edit this task’s note\r".encode())
+            present("Add or edit this task’s note\r".encode(), "┌ [remote] Note · Native task")
             send(b"iMenu note\x1b")
             send(b":write\r")
             wait_for(lambda: "Menu note" in note_text())
@@ -252,7 +344,7 @@ class NativeTests(unittest.TestCase):
             send(b":plugin-restart time\r")
             editor.open_time()
             send(b"ggj")
-            send(b"::time-note\r")
+            present(b"::time-note\r", "┌ [remote] Note · Native task")
             send(b":reload\r")
             # Reload starts on Cancel; Ctrl-p selects Keep local edits. Physical
             # Enter adopts the provider's baseline without discarding our text.
@@ -262,15 +354,15 @@ class NativeTests(unittest.TestCase):
             send(b":buffer-close\r")
             editor.open_time()
             send(b"ggj")
-            send(b"::time-delete\r")
+            present(b"::time-delete\r", "┌ Delete task ─")
             send(b"\x1b")
             self.assertEqual(len(rows()), 1)
-            send(b"::time-delete\r")
+            present(b"::time-delete\r", "┌ Delete task ─")
             send(b"\r")
             wait_for(lambda: rows() == [])
             # Adding from Tab needs no selected row, so it works on an empty list.
             send(b"\t")
-            send(b"Add task here\r")
+            present(b"Add task here\r", "┌ Add task ─")
             send(b"Menu task\r")
             wait_for(lambda: rows() == [("Menu task", "todo")])
             send(b":plugin-stop time\r")
@@ -281,12 +373,12 @@ class NativeTests(unittest.TestCase):
         with NativeEditor(self, persistent=True) as editor:
             editor.open_time()
             editor.wait_for(editor.database.exists)
-            editor.send(b"::time-add\r")
+            editor.present(b"::time-add\r", "┌ Add task ─")
             editor.send(b"Persistent task\r")
             editor.wait_for(lambda: editor.rows() == [("Persistent task", "todo")])
             editor.send(b"ggj\r")
             editor.wait_for(lambda: editor.active() == 1)
-            editor.send(b"::time-note\r")
+            editor.present(b"::time-note\r", "┌ [remote] Note · Persistent task")
             editor.send(b"iUnsaved across detach\x1b")
             # A live activity lease and a dirty provider document both remain
             # owned by the persistent host after the frontend leaves.
