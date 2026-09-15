@@ -240,6 +240,10 @@ RU_TIME_VALIDATE_SCHEMA=1 python3 -m unittest discover -s tests -p test_wire.py 
 ```
 
 CI runs the standard-library suite on Linux and macOS with Python 3.10 and 3.14.
+It also builds Runyte at the revision recorded in [VENDOR.md](VENDOR.md) and runs
+the real-editor test against it on both platforms. Runyte's own CI runs this
+suite against each of its commits, so an editor change that breaks ru-time is
+reported there too.
 The schema fixture and protocol client are pinned together; see [VENDOR.md](VENDOR.md).
 
 License: [MPL-2.0](LICENSE).

@@ -16,3 +16,40 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
+
+  native:
+    name: Real editor at the pinned Runyte (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # Runyte's own CI uses this short directory on macOS for its PTY tests.
+      TMPDIR: ${{ matrix.os == 'macos-latest' && '/private/tmp' || '/tmp' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the pinned Runyte revision
+        id: pin
+        run: |
+          revision=$(sed -n 's|^Source: https://github.com/runyte/runyte/tree/\([0-9a-f]\{40\}\)/.*|\1|p' VENDOR.md)
+          test -n "$revision" || { echo "VENDOR.md names no Runyte revision" >&2; exit 1; }
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: runyte/runyte
+          ref: ${{ steps.pin.outputs.revision }}
+          path: runyte
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runyte
+      - run: cargo build --locked --manifest-path runyte/Cargo.toml
+      # RUNYTE_BIN enables the real-editor test, which is skipped otherwise.
+      - run: python -m unittest discover -s tests -v
+        env:
+          RUNYTE_BIN: ${{ github.workspace }}/runyte/target/debug/runyte
