@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hosts": [
+    {
+      "revision": "3fa28b0bf6bb418027265413745080505d798f09",
+      "host_version": "0.3.0",
+      "mode": "bootstrap-candidate",
+      "roles": [
+        "oldest",
+        "newest"
+      ]
+    }
+  ]
+}

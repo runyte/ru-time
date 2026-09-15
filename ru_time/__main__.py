@@ -5,13 +5,14 @@ from pathlib import Path
 import sqlite3
 import sys
 
+from .compatibility import API, RUNYTE_RANGE, CAPABILITIES
 from .storage import Store, StorageError, default_database, load_export, write_export
 
 
 def configuration():
-    return {"plugins": [{"id": "time", "enabled": True, "api": "runyte-experimental-2",
+    return {"plugins": [{"id": "time", "enabled": True, "api": API, "runyte": RUNYTE_RANGE,
                          "executable": sys.executable, "args": [str(Path(__file__).resolve().parents[1] / "time_plugin.py")],
-                         "capabilities": ["views", "interaction", "activity", "providers", "documents", "jobs"],
+                         "capabilities": list(CAPABILITIES),
                          "bindings": {"open": "Space = =", "add": "Space = a", "pause": "Space = p", "delete": "Space = d", "note": "Space = n"}}]}
 
 

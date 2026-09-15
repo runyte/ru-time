@@ -1,4 +1,6 @@
 name: Tests
+permissions:
+  contents: read
 on:
   push:
   pull_request:
@@ -12,44 +14,77 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
 
-  native:
-    name: Real editor at the pinned Runyte (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    env:
-      # Runyte's own CI uses this short directory on macOS for its PTY tests.
-      TMPDIR: ${{ matrix.os == 'macos-latest' && '/private/tmp' || '/tmp' }}
+  host-inventory:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.hosts.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
-      - name: Read the pinned Runyte revision
-        id: pin
-        run: |
-          revision=$(sed -n 's|^Source: https://github.com/runyte/runyte/tree/\([0-9a-f]\{40\}\)/.*|\1|p' VENDOR.md)
-          test -n "$revision" || { echo "VENDOR.md names no Runyte revision" >&2; exit 1; }
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
         with:
-          repository: runyte/runyte
-          ref: ${{ steps.pin.outputs.revision }}
-          path: runyte
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+      - id: hosts
+        run: python tests/check_hosts.py --github-output "$GITHUB_OUTPUT"
+
+  native:
+    name: Real editor ${{ matrix.host.host_version }} / Python ${{ matrix.host.python }} (${{ matrix.os }})
+    needs: host-inventory
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(needs.host-inventory.outputs.matrix).include }}
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      TMPDIR: ${{ matrix.os == 'macos-latest' && '/private/tmp' || '/tmp' }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/runyte-target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: runyte/runyte
+          ref: ${{ matrix.host.revision }}
+          path: runyte
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.host.python }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: runyte
-      - run: cargo build --locked --manifest-path runyte/Cargo.toml
-      # RUNYTE_BIN enables the real-editor test, which is skipped otherwise.
-      - run: python -m unittest discover -s tests -v
+          workspaces: runyte -> ../runyte-target
+          key: native-${{ matrix.host.revision }}-${{ matrix.host.host_version }}
+      - name: Verify immutable host checkout
         env:
-          RUNYTE_BIN: ${{ github.workspace }}/runyte/target/debug/runyte
+          EXPECTED_REVISION: ${{ matrix.host.revision }}
+        run: test "$(git -C runyte rev-parse HEAD)" = "$EXPECTED_REVISION"
+      - name: Prepare the declared host
+        id: candidate
+        run: python runyte/docs/plugins/compatibility/candidate.py --source runyte --destination "$RUNNER_TEMP/runyte-candidate" --github-output "$GITHUB_OUTPUT"
+      - name: Verify host construction
+        env:
+          ACTUAL_VERSION: ${{ steps.candidate.outputs.host_version }}
+          ACTUAL_MODE: ${{ steps.candidate.outputs.mode }}
+          EXPECTED_VERSION: ${{ matrix.host.host_version }}
+          EXPECTED_MODE: ${{ matrix.host.mode }}
+        run: |
+          test "$ACTUAL_VERSION" = "$EXPECTED_VERSION"
+          test "$ACTUAL_MODE" = "$EXPECTED_MODE"
+      - run: cargo build --locked --manifest-path "${{ steps.candidate.outputs.source }}/Cargo.toml"
+      - name: Require native test execution
+        env:
+          RUNYTE_BIN: ${{ github.workspace }}/runyte-target/debug/runyte
+        run: |
+          python tests/require_native.py --host-version '${{ matrix.host.host_version }}'

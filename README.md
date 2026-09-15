@@ -19,12 +19,15 @@ review. Task order stays stable when status or elapsed time changes.
 
 ## Install
 
-Use a Runyte build supporting `runyte-experimental-2`, native input, viewport
-observations, activity leases, and registered `::` command aliases. This API is
-experimental; compatibility is tested against Runyte's source revision recorded
-in [VENDOR.md](VENDOR.md). Older hosts reject the new alias field, so update
-Runyte before restarting this plugin.
+Use Runyte **>=0.3.0, <0.4.0** with the stable `runyte-1` application
+protocol. Stable support starts at 0.3.0; development acceptance uses an explicitly
+versioned 0.3.0 candidate until that release is published. Regenerate old
+experimental configuration and restart its persistent host during this cutover.
 
+The supported range is authored in `ru_time/compatibility.py`. The separately
+recorded SDK source revision in [VENDOR.md](VENDOR.md) identifies the vendored
+client bytes; it does not set the minimum host release. Compatible host updates
+do not require replacing the client.
 ```sh
 git clone https://github.com/runyte/ru-time.git
 cd ru-time
@@ -40,7 +43,8 @@ The equivalent YAML is:
 plugins:
   - id: time
     enabled: true
-    api: runyte-experimental-2
+    api: runyte-1
+    runyte: ">=0.3.0, <0.4.0"
     executable: /absolute/path/to/python3
     args:
       - /absolute/path/to/ru-time/time_plugin.py
@@ -240,10 +244,14 @@ RU_TIME_VALIDATE_SCHEMA=1 python3 -m unittest discover -s tests -p test_wire.py 
 ```
 
 CI runs the standard-library suite on Linux and macOS with Python 3.10 and 3.14.
-It also builds Runyte at the revision recorded in [VENDOR.md](VENDOR.md) and runs
-the real-editor test against it on both platforms. Runyte's own CI runs this
-suite against each of its commits, so an editor change that breaks ru-time is
-reported there too.
+Required native CI builds immutable host revisions from
+[tests/runyte-hosts.json](tests/runyte-hosts.json), covering the oldest supported
+host and newest retained compatible release on both platforms. The initial
+baseline is explicitly a 0.3.0 candidate, not a published release. Native tests
+must execute; an unavailable binary or missing test is a failure. Runyte's
+required compatibility lane retains an immutable ru-time revision and client;
+its moving-head lane is advisory. Runyte owns new-host regressions against that
+baseline; ru-time owns plugin changes and inaccurate minimum-host declarations.
 The schema fixture and protocol client are pinned together; see [VENDOR.md](VENDOR.md).
 
 License: [MPL-2.0](LICENSE).

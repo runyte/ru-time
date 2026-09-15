@@ -4,7 +4,7 @@ ru-time is a Runyte plugin, not a Codex plugin. Keep runtime and default tests
 Python 3.10+ standard-library only, with Linux/macOS support. Read README.md and
 VENDOR.md before changing the protocol integration.
 
-Use the public `runyte-experimental-2` contract. Stdout belongs exclusively to
+Use the public `runyte-1` contract. Stdout belongs exclusively to
 the JSON wire protocol during plugin execution. The vendored client is pinned;
 update it deliberately with its provenance and schema.
 

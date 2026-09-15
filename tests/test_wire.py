@@ -25,7 +25,7 @@ class WireTests(unittest.TestCase):
         self.validator = None
         if os.environ.get("RU_TIME_VALIDATE_SCHEMA"):
             from jsonschema import Draft202012Validator
-            schema = json.loads((ROOT / "tests/runyte-experimental-2.schema.json").read_text())
+            schema = json.loads((ROOT / "tests/runyte-1.schema.json").read_text())
             self.validator = Draft202012Validator({"$defs": schema["$defs"], "$ref": "#/$defs/pluginMessage"})
         self.send(HANDSHAKE[0])
         self.registration = self.receive()

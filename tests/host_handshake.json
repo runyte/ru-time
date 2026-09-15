@@ -1,7 +1,7 @@
 [
   {
     "type": "hello",
-    "version": "runyte-experimental-2",
+    "version": "runyte-1",
     "capabilities": [
       "state",
       "settings",
@@ -63,7 +63,9 @@
         "input_surfaces": 1,
         "input_fields": 16
       }
-    }
+    },
+    "features": [],
+    "host_version": "0.3.0"
   },
   {
     "type": "registered",
@@ -121,6 +123,8 @@
         "input_surfaces": 1,
         "input_fields": 16
       }
-    }
+    },
+    "features": [],
+    "runyte": ">=0.3.0, <0.4.0"
   }
 ]

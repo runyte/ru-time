@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Small epoch 2 authoring client. Python 3.10+, standard library only."""
+"""Stable application authoring client. Python 3.10+, standard library only."""
 import base64
 import binascii
 import concurrent.futures
@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-VERSION = 'runyte-experimental-2'
+VERSION = 'runyte-1'
 LIMIT = 1024 * 1024
 MODEL_LIMIT = 4 * 1024 * 1024
 MODEL_CHUNK = 128 * 1024
@@ -162,9 +162,178 @@ def _validate_state_document(document):
         if characters > STATE_LIMIT:
             raise PluginError('limit_exceeded', 'State document exceeds its byte limit')
 
+# Version comparison deliberately implements the documented bounded interval
+# language, not a third-party package manager's range conventions.
+_MAX_COMPONENT = (1 << 64) - 1
+
+
+def _version(value):
+    if not isinstance(value, str) or not 1 <= len(value.encode('utf-8')) <= 256:
+        raise ValueError('Invalid version length')
+    version, plus, build = value.partition('+')
+    core, dash, prerelease = version.partition('-')
+    for suffix, numeric, present in ((build, False, plus), (prerelease, True, dash)):
+        if present:
+            for part in suffix.split('.'):
+                if not part or any(not (c.isascii() and (c.isalnum() or c == '-')) for c in part):
+                    raise ValueError('Invalid version identifier')
+                if numeric and part.isdigit() and len(part) > 1 and part[0] == '0':
+                    raise ValueError('Leading zero in prerelease identifier')
+    parts = core.split('.')
+    if len(parts) != 3 or any(not p or not p.isascii() or not p.isdigit() or (len(p) > 1 and p[0] == '0') for p in parts):
+        raise ValueError('Version needs three numeric components')
+    values = tuple(map(int, parts))
+    if any(v > _MAX_COMPONENT for v in values):
+        raise ValueError('Version component overflow')
+    return values, prerelease if dash else None
+
+
+class ReleaseRange:
+    """One bounded final-release interval, or one exact release/prerelease."""
+    def __init__(self, value):
+        if not isinstance(value, str) or not 1 <= len(value.encode('utf-8')) <= 256:
+            raise ValueError('Range must contain 1–256 bytes')
+        if '+' in value or any(c.isspace() and c not in ' \t' for c in value):
+            raise ValueError('Invalid range whitespace or build metadata')
+        value = value.strip(' \t')
+        self.prerelease = None
+        if value.startswith('='):
+            exact = value[1:].strip(' \t')
+            core, self.prerelease = _version(exact)
+            self.first = self.last = self._ordinal(core)
+            self.normalized = '=' + exact
+            return
+        terms = value.split(',')
+        if len(terms) != 2:
+            raise ValueError('Range needs one lower and one upper bound, or =version')
+        lower = upper = None
+        for term in terms:
+            term = term.strip(' \t')
+            operator = next((op for op in ('>=', '<=', '>', '<') if term.startswith(op)), None)
+            if operator is None:
+                raise ValueError('Unsupported range comparator')
+            spelling = term[len(operator):].strip(' \t')
+            core, pre = _version(spelling)
+            if pre is not None:
+                raise ValueError('Prereleases require an exact =version range')
+            ordinal = self._ordinal(core)
+            if operator.startswith('>'):
+                if lower is not None:
+                    raise ValueError('Duplicate lower bound')
+                lower = (ordinal + (operator == '>'), operator + spelling)
+            else:
+                if upper is not None:
+                    raise ValueError('Duplicate upper bound')
+                upper = (ordinal - (operator == '<'), operator + spelling)
+        if lower is None or upper is None or lower[0] > upper[0]:
+            raise ValueError('Empty or incomplete range')
+        self.first, self.last = lower[0], upper[0]
+        self.normalized = lower[1] + ', ' + upper[1]
+
+    @staticmethod
+    def _ordinal(core):
+        return (core[0] << 128) | (core[1] << 64) | core[2]
+
+    def contains(self, version):
+        core, pre = _version(version)
+        return pre == self.prerelease and self.first <= self._ordinal(core) <= self.last
+
+    def is_subset_of(self, authored):
+        return self.prerelease == authored.prerelease and self.first >= authored.first and self.last <= authored.last
+
+
+# Stable v1 minimum capacities and deadline allowances. Extra host inventory
+# keys are informational; the client never expands its own fixed wire bounds.
+_LIMIT_FLOORS = {'line_bytes': 1048576,
+ 'commands': 64,
+ 'requests': 16,
+ 'finite_jobs': 4,
+ 'control_queue_messages': 32,
+ 'control_queue_bytes': 4194304,
+ 'control_deadline_seconds': 10,
+ 'job_deadline_seconds': 3600,
+ 'cancellation_seconds': 2,
+ 'process_handles': 4,
+ 'process_io_bytes': 65536,
+ 'process_output_bytes': 1048576,
+ 'process_write_seconds': 5,
+ 'activity_leases': 2,
+ 'activity_seconds': 600,
+ 'settings_bytes': 65536,
+ 'state_document_bytes': 1044480,
+ 'state_requests': 1}
+_RESOURCE_FLOORS = {'plugin_instances': 8,
+ 'views': 16,
+ 'model_bytes': 4194304,
+ 'model_rows': 10000,
+ 'model_projection_bytes': 4194304,
+ 'model_stages': 2,
+ 'model_snapshots': 2,
+ 'model_chunk_bytes': 131072,
+ 'model_idle_seconds': 30,
+ 'text_chunk_bytes': 262144,
+ 'transaction_changes': 1024,
+ 'transaction_text_bytes': 524288,
+ 'text_snapshots': 2,
+ 'text_snapshot_bytes': 16777216,
+ 'text_snapshot_idle_seconds': 30,
+ 'retained_payload_bytes': 50331648,
+ 'host_retained_payload_bytes': 167772160,
+ 'subscriptions': 32,
+ 'watched_sources': 256,
+ 'observation_state_bytes': 4096,
+ 'input_surfaces': 1,
+ 'input_fields': 16}
+
+
+def _validate_limits(value):
+    if not isinstance(value, dict):
+        raise ValueError('Invalid host limits')
+    def validate_fields(fields, floors):
+        for name, minimum in floors.items():
+            number = fields.get(name)
+            if type(number) is not int or not minimum <= number <= _MAX_COMPONENT:
+                raise ValueError('Missing, invalid or insufficient host limit')
+    validate_fields(value, _LIMIT_FLOORS)
+    if 'resources' in value:
+        resources = value['resources']
+        if not isinstance(resources, dict):
+            raise ValueError('Invalid host resource inventory')
+        validate_fields(resources, _RESOURCE_FLOORS)
+    return value
+
+
+def _names(values, *, features=False):
+    if not isinstance(values, (list, tuple)) or len(values) > 32 or len(set(values)) != len(values):
+        raise ValueError('Invalid negotiation set')
+    limit = 64 if features else 48
+    for name in values:
+        if not isinstance(name, str) or not 1 <= len(name) <= limit:
+            raise ValueError('Invalid negotiation name')
+        if any(not (c.isascii() and (c.isalnum() or c in ('-._' if features else '-'))) for c in name):
+            raise ValueError('Invalid negotiation name')
+        if not features and name != name.lower():
+            raise ValueError('Invalid capability name')
+    return frozenset(values)
+
+
 class Application:
-    def __init__(self, name, commands, capabilities, *, settings_schema=None):
+    def __init__(self, name, commands, capabilities, *, runyte, optional_capabilities=(), required_features=(), optional_features=(), settings_schema=None):
         self.name, self.commands, self.capabilities = name, commands, capabilities
+        self.runyte = ReleaseRange(runyte)
+        self.optional_capabilities = list(optional_capabilities)
+        self.required_features = list(required_features)
+        self.optional_features = list(optional_features)
+        required = _names(capabilities)
+        optional = _names(self.optional_capabilities)
+        features = _names(self.required_features, features=True)
+        optional_features = _names(self.optional_features, features=True)
+        if required & optional or len(required | optional) > 32 or features & optional_features or len(features | optional_features) > 32:
+            raise ValueError('Overlapping or excessive negotiation sets')
+        self.host_version = None
+        self.granted_capabilities = frozenset()
+        self.features = frozenset()
+        self.limits = {}
         self.settings_schema = settings_schema
         self.handlers = {}
         self.resource_handlers = {}
@@ -597,16 +766,49 @@ class Application:
     def run(self):
         try:
             hello = self._read()
-            if hello.get('type') != 'hello' or hello.get('version') != VERSION:
-                raise PluginError('unsupported', 'Application requires epoch 2')
-            registration = {'type': 'register', 'version': VERSION, 'name': self.name,
-                            'commands': self.commands, 'required_capabilities': self.capabilities,
-                            'optional_capabilities': []}
-            if self.settings_schema is not None:
-                registration['settings_schema'] = self.settings_schema
-            self._write(registration)
-            if self._read().get('type') != 'registered':
-                raise PluginError('unavailable', 'Registration refused')
+            if not isinstance(hello, dict) or hello.get('type') != 'hello' or hello.get('version') != VERSION:
+                raise PluginError('unsupported_protocol', 'Application requires runyte-1')
+            try:
+                host_version = hello['host_version']
+                if not self.runyte.contains(host_version):
+                    raise PluginError('unsupported_release', f'Host {host_version} is outside {self.runyte.normalized}')
+                _validate_limits(hello['limits'])
+                supported = _names(hello['capabilities'])
+                supported_features = _names(hello['features'], features=True)
+                if not set(self.capabilities) <= supported:
+                    raise PluginError('unsupported_capability', 'Required host capability is unavailable')
+                if not set(self.required_features) <= supported_features:
+                    raise PluginError('unsupported_feature', 'Required host feature is unavailable')
+                registration = {'type': 'register', 'version': VERSION, 'runyte': self.runyte.normalized,
+                                'name': self.name, 'commands': self.commands,
+                                'required_capabilities': self.capabilities,
+                                'optional_capabilities': self.optional_capabilities,
+                                'required_features': self.required_features, 'optional_features': self.optional_features}
+                if self.settings_schema is not None:
+                    registration['settings_schema'] = self.settings_schema
+                self._write(registration)
+                registered = self._read()
+                if not isinstance(registered, dict):
+                    raise ValueError('Invalid registration envelope')
+                if registered.get('type') == 'registration_error':
+                    raise PluginError(registered.get('code', 'invalid_registration'), registered.get('message', 'Registration refused'))
+                if registered.get('type') != 'registered':
+                    raise PluginError('unavailable', 'Registration refused')
+                granted = _names(registered['capabilities'])
+                selected = _names(registered['features'], features=True)
+                effective = ReleaseRange(registered['runyte'])
+                if (not set(self.capabilities) <= granted or not granted <= supported
+                        or not granted <= set(self.capabilities) | set(self.optional_capabilities)
+                        or not set(self.required_features) <= selected or not selected <= supported_features
+                        or not selected <= set(self.required_features) | set(self.optional_features)
+                        or not effective.is_subset_of(self.runyte) or not effective.contains(host_version)):
+                    raise PluginError('invalid_registration', 'Invalid negotiated registration')
+                limits = _validate_limits(registered['limits'])
+                self.host_version = host_version
+                self.granted_capabilities, self.features = granted, selected
+                self.limits = limits
+            except (KeyError, TypeError, ValueError) as error:
+                raise PluginError('invalid_registration', 'Invalid host handshake') from error
             while True:
                 message = self._read()
                 if message['type'] == 'response':

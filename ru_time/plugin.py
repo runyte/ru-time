@@ -9,9 +9,9 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendor"))
 from application import Application, PluginError
+from .compatibility import RUNYTE_RANGE, CAPABILITIES
 from .storage import Store, StorageError, parse_end, utc_text
 
-CAPABILITIES = ["views", "interaction", "activity", "providers", "documents", "jobs"]
 COMMANDS = [
     {"name": "open", "alias": "time", "description": "Open time tracker", "context": "workspace"},
     {"name": "add", "alias": "time-add", "description": "Add a task", "context": "workspace"},
@@ -51,7 +51,7 @@ def task_model(tasks):
 
 class TimePlugin:
     def __init__(self, database, app=None, *, store_factory=Store, plugin_id="time"):
-        self.app = app or Application("Time", COMMANDS, CAPABILITIES)
+        self.app = app or Application("Time", COMMANDS, CAPABILITIES, runyte=RUNYTE_RANGE)
         self.database, self.store_factory, self.store = database, store_factory, None
         self.lock = threading.RLock()
         self.lease_lock = threading.Lock()
