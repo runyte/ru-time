@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
 """Optional real-editor acceptance. Set RUNYTE_BIN to a compatible Runyte build."""
+import errno
 import fcntl
 from contextlib import closing
 import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import sqlite3
@@ -64,18 +66,34 @@ class NativeEditor:
         finally:
             os.close(slave)
         self.master = master
+        self.output.clear()
+        self.wait_for(lambda: self.sees(b" NOR "))
+
+    def sees(self, text):
+        # Strip formatting from the observed output, including escape sequences
+        # split across reads. These checks identify fresh, rendered status/command
+        # text; they do not attempt to emulate the editor's terminal screen.
+        return text in re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", self.output)
+
+    def read_output(self, seconds):
+        if not select.select([self.master], [], [], seconds)[0]:
+            return True
+        try:
+            chunk = os.read(self.master, 65536)
+        except OSError as error:
+            # Linux reports EIO when the last slave closes; macOS returns EOF.
+            if error.errno != errno.EIO:
+                raise
+            return False
+        self.output.extend(chunk)
+        del self.output[:-65536]
+        return bool(chunk)
 
     def drain(self, seconds=0.3):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
-            if select.select([self.master], [], [], max(0, min(0.05, end - time.monotonic())))[0]:
-                try:
-                    chunk = os.read(self.master, 65536)
-                    if not chunk:
-                        break
-                    self.output.extend(chunk)
-                except OSError:
-                    break
+            if not self.read_output(max(0, min(0.05, end - time.monotonic()))):
+                break
         self.test.assertIsNone(self.child.poll(), self.output[-8000:].decode(errors="replace"))
 
     def send(self, keys):
@@ -107,9 +125,32 @@ class NativeEditor:
     def active(self):
         return self.query("SELECT COUNT(*) FROM intervals WHERE end_ms IS NULL")[0][0]
 
+    def open_time(self):
+        # Registration is asynchronous. A startup/restart delay cannot establish
+        # that Enter will accept a registered plugin command. Observe its native
+        # palette entry first, using only output from this opening of the palette.
+        self.output.clear()
+        self.send(b"::time")
+        self.wait_for(lambda: self.sees(b"plugin.time.open"))
+        self.send(b"\r")
+
+    def wait_for_exit(self, timeout=5):
+        # Keep the PTY sink active through the final screen/terminal restoration.
+        # Darwin can wait for terminal output to drain before exposing child exit.
+        deadline = time.monotonic() + timeout
+        while self.child.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(self.child.args, timeout,
+                                                output=bytes(self.output))
+            if not self.read_output(min(0.05, remaining)):
+                # EOF may arrive just before waitpid observes termination.
+                time.sleep(min(0.01, remaining))
+        return self.child.returncode
+
     def detach(self):
         os.write(self.master, b":detach\r")
-        self.test.assertEqual(self.child.wait(timeout=5), 0)
+        self.test.assertEqual(self.wait_for_exit(), 0)
         os.close(self.master)
         self.master = None
 
@@ -123,20 +164,28 @@ class NativeEditor:
 
     def __exit__(self, exception_type, *_):
         try:
-            if self.child is not None and self.child.poll() is None:
-                os.killpg(self.child.pid, signal.SIGKILL)
-                self.child.wait(timeout=3)
-            if self.master is not None:
-                os.close(self.master)
-            if self.persistent:
-                # A detached host has a separate process group; explicitly stop
-                # only this isolated workspace before removing its state.
-                result = subprocess.run([os.environ["RUNYTE_BIN"], "--config", str(self.config),
-                                         "--session-stop", str(self.project), "--force"],
-                                        cwd=self.project, env=self.environment, capture_output=True,
-                                        text=True, timeout=10)
-                if exception_type is None:
-                    self.test.assertEqual(result.returncode, 0, result.stderr)
+            try:
+                # On failure, close the terminal sink before killing/reaping its
+                # writer. An undrained master must not trap cleanup on macOS either.
+                if self.master is not None:
+                    os.close(self.master)
+                    self.master = None
+                if self.child is not None and self.child.poll() is None:
+                    try:
+                        os.killpg(self.child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    self.child.wait(timeout=3)
+            finally:
+                if self.persistent:
+                    # A detached host has a separate process group; explicitly stop
+                    # only this isolated workspace before removing its state.
+                    result = subprocess.run([os.environ["RUNYTE_BIN"], "--config", str(self.config),
+                                             "--session-stop", str(self.project), "--force"],
+                                            cwd=self.project, env=self.environment, capture_output=True,
+                                            text=True, timeout=10)
+                    if exception_type is None:
+                        self.test.assertEqual(result.returncode, 0, result.stderr)
         finally:
             self.temporary.cleanup()
 
@@ -147,9 +196,7 @@ class NativeTests(unittest.TestCase):
         with NativeEditor(self) as editor:
             drain, send, wait_for = editor.drain, editor.send, editor.wait_for
             database, rows, active = editor.database, editor.rows, editor.active
-            master, child = editor.master, editor.child
-            drain(1.5)
-            send(b"::time\r")
+            editor.open_time()
             wait_for(database.exists)
             # Cancel an unanswered native prompt, then prove the next command
             # is admitted instead of leaving the plugin permanently busy.
@@ -183,14 +230,14 @@ class NativeTests(unittest.TestCase):
                     return row[0] if row else ""
             wait_for(lambda: "First line" in note_text() and "Second line" in note_text())
             send(b":buffer-close\r")
-            send(b"::time\r")
+            editor.open_time()
             send(b"ggj")
             send(b"::time-note\r")
             send(b"%d")
             send(b":write\r")
             wait_for(lambda: note_text() == "")
             send(b":buffer-close\r")
-            send(b"::time\r")
+            editor.open_time()
             send(b"ggj")
             send(b"\t")
             send("Add or edit this task’s note\r".encode())
@@ -203,8 +250,7 @@ class NativeTests(unittest.TestCase):
             send(b"ggiRebound \x1b")
             self.assertNotIn("Rebound", note_text())
             send(b":plugin-restart time\r")
-            drain(1.0)
-            send(b"::time\r")
+            editor.open_time()
             send(b"ggj")
             send(b"::time-note\r")
             send(b":reload\r")
@@ -214,7 +260,7 @@ class NativeTests(unittest.TestCase):
             send(b":write\r")
             wait_for(lambda: "Rebound Menu note" in note_text())
             send(b":buffer-close\r")
-            send(b"::time\r")
+            editor.open_time()
             send(b"ggj")
             send(b"::time-delete\r")
             send(b"\x1b")
@@ -228,13 +274,12 @@ class NativeTests(unittest.TestCase):
             send(b"Menu task\r")
             wait_for(lambda: rows() == [("Menu task", "todo")])
             send(b":plugin-stop time\r")
-            os.write(master, b":quit-all!\r")
-            child.wait(timeout=5)
+            os.write(editor.master, b":quit-all!\r")
+            self.assertEqual(editor.wait_for_exit(), 0)
 
     def test_persistent_detach_retains_timer_and_unsaved_note(self):
         with NativeEditor(self, persistent=True) as editor:
-            editor.drain(1.5)
-            editor.send(b"::time\r")
+            editor.open_time()
             editor.wait_for(editor.database.exists)
             editor.send(b"::time-add\r")
             editor.send(b"Persistent task\r")
@@ -249,7 +294,6 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(editor.active(), 1)
             self.assertEqual(editor.query("SELECT text FROM notes"), [])
             editor.attach()
-            editor.drain(1.0)
             editor.send(b":write\r")
             editor.wait_for(lambda: "Unsaved across detach" in str(editor.query("SELECT text FROM notes")))
             editor.send(b"::time-pause\r")
