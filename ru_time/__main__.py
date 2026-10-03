@@ -18,7 +18,7 @@ def configuration():
 
 def main():
     parser = argparse.ArgumentParser(description="Runyte task timer (Python standard library only)")
-    parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Workspace identity (defaults to the plugin working directory)")
+    parser.add_argument("--workspace", type=Path, help="Workspace identity (defaults to the plugin working directory)")
     parser.add_argument("--database", type=Path, help="Explicit SQLite path, useful when moving task history")
     parser.add_argument("--plugin-id", default="time", help="Configured plugin ID (default: time)")
     actions = parser.add_mutually_exclusive_group()
@@ -27,7 +27,8 @@ def main():
     actions.add_argument("--export", type=Path, metavar="FILE", help="Export JSON to a new file (stop the plugin first)")
     actions.add_argument("--import", dest="import_file", type=Path, metavar="FILE", help="Import JSON into an empty database (stop the plugin first)")
     args = parser.parse_args()
-    database = (args.database or default_database(args.workspace)).expanduser().resolve()
+    workspace = args.workspace.expanduser().resolve() if args.workspace is not None else Path.cwd()
+    database = (args.database or default_database(workspace)).expanduser().resolve()
     try:
         if args.print_config:
             config = configuration()
@@ -36,6 +37,8 @@ def main():
                 config["plugins"][0]["args"] += ["--plugin-id", args.plugin_id]
             if args.database:
                 config["plugins"][0]["args"] += ["--database", str(database)]
+            elif args.workspace is not None:
+                config["plugins"][0]["args"] += ["--workspace", str(workspace)]
             print(json.dumps(config, indent=2))
         elif args.print_database:
             print(database)

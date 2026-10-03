@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,42 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
+    def test_configuration_preserves_explicit_workspace_across_working_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected, other = root / "selected", root / "other"
+            selected.mkdir()
+            other.mkdir()
+            environment = {**os.environ, "XDG_DATA_HOME": str(root / "data"), "HOME": str(root)}
+            def cli(arguments, cwd):
+                return subprocess.run([sys.executable, *arguments], cwd=cwd, env=environment,
+                                      capture_output=True, text=True, check=True).stdout
+            entrypoint = str(ROOT / "time_plugin.py")
+            config = json.loads(cli([entrypoint, "--workspace", "selected", "--print-config"], root))
+            arguments = config["plugins"][0]["args"]
+            self.assertEqual(arguments, [entrypoint, "--workspace", str(selected.resolve())])
+            expected = cli([entrypoint, "--workspace", str(selected), "--print-database"], root)
+            self.assertEqual(cli([*arguments, "--print-database"], other), expected)
+            self.assertFalse((root / "data").exists())
+
+    def test_default_configuration_uses_the_host_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            host_workspace = root / "host"
+            host_workspace.mkdir()
+            environment = {**os.environ, "XDG_DATA_HOME": str(root / "data"), "HOME": str(root)}
+            entrypoint = str(ROOT / "time_plugin.py")
+            config = subprocess.run([sys.executable, entrypoint, "--print-config"], cwd=root,
+                                    env=environment, capture_output=True, text=True, check=True)
+            arguments = json.loads(config.stdout)["plugins"][0]["args"]
+            self.assertEqual(arguments, [entrypoint])
+            selected = subprocess.run([sys.executable, *arguments, "--print-database"], cwd=host_workspace,
+                                      env=environment, capture_output=True, text=True, check=True).stdout
+            expected = subprocess.run([sys.executable, entrypoint, "--workspace", str(host_workspace), "--print-database"],
+                                      cwd=root, env=environment, capture_output=True, text=True, check=True).stdout
+            self.assertEqual(selected, expected)
+            self.assertFalse((root / "data").exists())
+
     def test_configuration_uses_current_checkout_and_no_database_is_created(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "time.sqlite3"
