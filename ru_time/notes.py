@@ -62,10 +62,11 @@ class Notes:
             raise PluginError("stale", "Note changed while reading")
         data = text.encode("utf-8")
         offset, limit = context["offset"], context["limit"]
-        if not 0 <= offset <= len(data) or not 1 <= limit <= 128 * 1024:
+        if (type(offset) is not int or type(limit) is not int
+                or not 0 <= offset <= len(data) or not 1 <= limit <= 128 * 1024):
             raise PluginError("invalid_argument", "Invalid note range")
         end = min(len(data), offset + limit)
-        while end < len(data) and data[end] & 0xc0 == 0x80:
+        while offset < end < len(data) and data[end] & 0xc0 == 0x80:
             end -= 1
         try:
             chunk = data[offset:end].decode("utf-8")
@@ -104,8 +105,13 @@ class Notes:
 
     def chunk(self, context):
         item = self.upload(context)
-        data = context["text"].encode("utf-8")
-        if len(data) > 128 * 1024 or context["offset"] != len(item["data"]) or len(item["data"]) + len(data) > item["bytes"]:
+        try:
+            data = context["text"].encode("utf-8")
+        except UnicodeError:
+            raise PluginError("invalid_argument", "Note chunks must be valid UTF-8") from None
+        if (type(context["offset"]) is not int or len(data) > 128 * 1024
+                or context["offset"] != len(item["data"])
+                or len(item["data"]) + len(data) > item["bytes"]):
             raise PluginError("invalid_argument", "Invalid note upload range")
         item["data"].extend(data)
         return {"kind": "write_chunk", "value": {"offset": len(item["data"])}}

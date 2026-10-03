@@ -120,6 +120,41 @@ class NotesTests(unittest.TestCase):
         other.import_data(data)
         self.assertEqual(other.export_data(), data)
 
+    def test_read_ranges_never_split_scalars_or_return_empty_before_eof(self):
+        text = "é猫🦀x"
+        self.upload(text)
+        encoded = text.encode("utf-8")
+        version = self.store.note(self.key)[2]
+        boundaries = {len(text[:index].encode("utf-8")) for index in range(len(text) + 1)}
+        for offset in range(len(encoded) + 1):
+            for limit in range(1, 6):
+                with self.subTest(offset=offset, limit=limit):
+                    valid_ends = [end for end in boundaries if offset < end <= offset + limit]
+                    if offset not in boundaries or (offset < len(encoded) and not valid_ends):
+                        with self.assertRaises(PluginError) as error:
+                            self.call("read", version=version, offset=offset, limit=limit)
+                        self.assertEqual(error.exception.code, "invalid_argument")
+                    else:
+                        value = self.call("read", version=version, offset=offset, limit=limit)["value"]
+                        end = max(valid_ends) if valid_ends else len(encoded)
+                        self.assertEqual(value["text"].encode("utf-8"), encoded[offset:end])
+                        self.assertEqual(value["eof"], end == len(encoded))
+        for offset, limit in ((True, 1), (0, False), (0.5, 1), (0, 1.5)):
+            with self.assertRaises(PluginError) as error:
+                self.call("read", version=version, offset=offset, limit=limit)
+            self.assertEqual(error.exception.code, "invalid_argument")
+
+    def test_invalid_utf8_upload_does_not_change_staging(self):
+        self.call("write.begin", mode="conditional", encoding="utf-8", bytes=1, expected_version=self.empty)
+        for params in ({"text": "\ud800", "offset": 0}, {"text": "x", "offset": False}):
+            with self.assertRaises(PluginError) as error:
+                self.call("write.chunk", upload="job:1", **params)
+            self.assertEqual(error.exception.code, "invalid_argument")
+            self.assertEqual(self.plugin.notes.staging["job:1"]["data"], b"")
+        self.call("write.chunk", upload="job:1", offset=0, text="x")
+        self.call("write.commit", mode="conditional", upload="job:1", expected_version=self.empty)
+        self.assertEqual(self.store.note(self.key)[1], "x")
+
     def test_version_one_migration_and_import(self):
         self.plugin.close()
         with sqlite3.connect(self.path) as db:
