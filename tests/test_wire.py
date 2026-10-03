@@ -10,6 +10,8 @@ import tempfile
 import time
 import unittest
 
+from wire_support import JsonLineReader
+
 ROOT = Path(__file__).resolve().parents[1]
 HANDSHAKE = json.loads((ROOT / "tests/host_handshake.json").read_text())
 
@@ -22,7 +24,7 @@ class WireTests(unittest.TestCase):
         self.child = subprocess.Popen([sys.executable, str(ROOT / "time_plugin.py"), "--database", str(self.database)],
                                       cwd=self.tmp.name, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.addCleanup(self.close)
-        self.received = bytearray()
+        self.wire = JsonLineReader(self.child.stdout)
         self.validator = None
         if os.environ.get("RU_TIME_VALIDATE_SCHEMA"):
             from jsonschema import Draft202012Validator
@@ -52,23 +54,7 @@ class WireTests(unittest.TestCase):
         self.child.stdin.flush()
 
     def receive(self, timeout=3):
-        deadline = time.monotonic() + timeout
-        with selectors.DefaultSelector() as selector:
-            selector.register(self.child.stdout, selectors.EVENT_READ)
-            while True:
-                newline = self.received.find(b"\n")
-                if newline >= 0:
-                    line = bytes(self.received[:newline + 1])
-                    del self.received[:newline + 1]
-                    break
-                self.assertLess(len(self.received), 1_048_576, "Plugin response exceeded frame limit")
-                remaining = deadline - time.monotonic()
-                self.assertGreater(remaining, 0, "Plugin response timed out")
-                self.assertTrue(selector.select(remaining), "Plugin response timed out")
-                chunk = os.read(self.child.stdout.fileno(), min(65_536, 1_048_576 - len(self.received)))
-                self.assertTrue(chunk, "Plugin exited unexpectedly")
-                self.received.extend(chunk)
-        message = json.loads(line)
+        message = self.wire.receive(timeout)
         if self.validator:
             self.validator.validate(message)
         return message
@@ -175,7 +161,7 @@ class WireTests(unittest.TestCase):
 
     def test_idle_process_emits_no_unsolicited_messages(self):
         self.command("open")
-        self.assertEqual(self.received, bytearray())
+        self.assertEqual(self.wire.pending, bytearray())
         with selectors.DefaultSelector() as selector:
             selector.register(self.child.stdout, selectors.EVENT_READ)
             self.assertEqual(selector.select(0.2), [])

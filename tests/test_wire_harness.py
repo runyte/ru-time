@@ -2,10 +2,9 @@
 """Make transport-test deadlines reliable even when a child emits bad output."""
 import os
 import threading
-from types import SimpleNamespace
 import unittest
 
-import test_wire
+from wire_support import JsonLineReader
 
 
 class WireHarnessTests(unittest.TestCase):
@@ -15,10 +14,7 @@ class WireHarnessTests(unittest.TestCase):
         self.writer = os.fdopen(write_fd, "wb", buffering=0)
         self.addCleanup(self.reader.close)
         self.addCleanup(self.writer.close)
-        self.receiver = test_wire.WireTests()
-        self.receiver.child = SimpleNamespace(stdout=self.reader)
-        self.receiver.received = bytearray()
-        self.receiver.validator = None
+        self.receiver = JsonLineReader(self.reader)
 
     def test_partial_frame_times_out_and_can_then_be_completed(self):
         self.writer.write(b'{"value":')
@@ -57,7 +53,7 @@ class WireHarnessTests(unittest.TestCase):
             self.receiver.receive()
 
     def test_frame_limit_is_enforced_before_waiting_for_more_bytes(self):
-        self.receiver.received.extend(b"x" * 1_048_576)
+        self.receiver.pending.extend(b"x" * 1_048_576)
         with self.assertRaisesRegex(AssertionError, "exceeded frame limit"):
             self.receiver.receive()
 

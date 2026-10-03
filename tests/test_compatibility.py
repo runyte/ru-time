@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import selectors
 import subprocess
 import sys
 import tempfile
@@ -12,6 +11,7 @@ import unittest
 from ru_time.compatibility import API, RUNYTE_RANGE, CAPABILITIES
 from ru_time.plugin import COMMANDS
 from application import ReleaseRange, _version
+from wire_support import JsonLineReader
 
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = json.loads((ROOT / "tests/ranges.json").read_text())
@@ -75,12 +75,7 @@ class CompatibilityTests(unittest.TestCase):
                 hello, registered = json.loads((ROOT / "tests/host_handshake.json").read_text())
                 child.stdin.write((json.dumps(hello) + "\n").encode())
                 child.stdin.flush()
-                with selectors.DefaultSelector() as selector:
-                    selector.register(child.stdout, selectors.EVENT_READ)
-                    self.assertTrue(selector.select(5), "No registration from the shipped program")
-                frame = child.stdout.readline(1_048_577)
-                self.assertLessEqual(len(frame), 1_048_576)
-                registration = json.loads(frame)
+                registration = JsonLineReader(child.stdout).receive(timeout=5)
                 self.assertEqual(registration["type"], "register")
                 self.assertEqual(registration["version"], config["api"])
                 self.assertEqual(registration["version"], API)
