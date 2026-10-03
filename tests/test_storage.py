@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import copy
+import sqlite3
 import tempfile
 from pathlib import Path
 import unittest
@@ -106,6 +107,24 @@ class StorageTests(unittest.TestCase):
             Store(self.store.path)
         self.store.close()
         self.open(self.store.path)
+
+    def test_failed_shutdown_releases_resources_and_preserves_recovery(self):
+        key = self.store.add("Failed checkpoint")
+        self.store.toggle(key)
+        self.clock.advance(15)
+        self.store.checkpoint()
+        self.clock.advance(10)
+        self.store.db.execute("PRAGMA query_only=ON")
+        with self.assertRaises(sqlite3.OperationalError):
+            self.store.close()
+        self.assertTrue(self.store.owner.closed)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            self.store.db.execute("SELECT 1")
+        self.store.close()
+        reopened = self.open(self.store.path)
+        interval = reopened.interrupted(key)
+        self.assertEqual(interval["elapsed_ms"], 15000)
+        self.assertEqual(reopened.snapshot()[0]["elapsed_ms"], 15000)
 
     def test_unicode_titles_and_invalid_titles(self):
         key = self.store.add("  猫 café 🦀  ")

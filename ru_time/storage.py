@@ -328,10 +328,14 @@ class Store:
         with self.lock:
             if self.owner.closed:
                 return
-            if not interrupted:
-                self.pause()
-            self.db.close()
-            self.owner.close()
+            try:
+                if not interrupted:
+                    self.pause()
+            finally:
+                try:
+                    self.db.close()
+                finally:
+                    self.owner.close()
 
 
 def load_export(path):
