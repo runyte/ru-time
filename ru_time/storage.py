@@ -28,6 +28,10 @@ def title_text(value):
     if (not isinstance(value, str) or not value.strip() or len(value) > 512
             or any(ord(c) < 32 or 127 <= ord(c) <= 159 or c in "\u2028\u2029" for c in value)):
         raise StorageError("Use a nonempty, single-line task title of at most 512 characters")
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise StorageError("Task titles must be valid UTF-8 text") from None
     return value.strip()
 
 

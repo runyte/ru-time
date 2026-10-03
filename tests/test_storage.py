@@ -133,6 +133,23 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(StorageError):
                 self.store.rename(key, title)
 
+    def test_invalid_unicode_titles_are_rejected_before_database_writes(self):
+        self.store.add("Preserved")
+        original = self.store.export_data()
+        other = self.open(Path(self.tmp.name) / "other.sqlite3")
+        for title in ("bad\ud800", "bad\udfff"):
+            with self.subTest(title=repr(title)):
+                with self.assertRaises(StorageError):
+                    self.store.add(title)
+                with self.assertRaises(StorageError):
+                    self.store.rename(original["tasks"][0]["id"], title)
+                self.assertEqual(self.store.export_data(), original)
+                candidate = copy.deepcopy(original)
+                candidate["tasks"][0]["title"] = title
+                with self.assertRaises(StorageError):
+                    other.import_data(candidate)
+                self.assertEqual(other.snapshot(), [])
+
     def test_delete_running_task_removes_only_its_history(self):
         key = self.store.add("Remove")
         keep = self.store.add("Keep")
