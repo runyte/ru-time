@@ -203,6 +203,53 @@ class NotesTests(unittest.TestCase):
             self.call("read", version="different", offset=0, limit=1)
         self.assertEqual(error.exception.code, "stale")
 
+    def test_sqlite_save_failure_can_reconcile_and_cannot_revive_upload(self):
+        self.call("write.begin", mode="conditional", encoding="utf-8", bytes=1, expected_version=self.empty)
+        self.call("write.chunk", upload="job:1", offset=0, text="x")
+        self.store.db.execute("PRAGMA query_only=ON")
+        try:
+            with self.assertRaises(PluginError) as error:
+                self.call("write.commit", mode="conditional", upload="job:1", expected_version=self.empty)
+            self.assertEqual(error.exception.code, "unavailable")
+        finally:
+            self.store.db.execute("PRAGMA query_only=OFF")
+        self.assertEqual(self.plugin.notes.staging, {})
+        result = self.call("reconcile", job="read:reconcile", previous_write="job:1")
+        self.assertEqual(result["value"]["metadata"]["version"], self.empty)
+        self.assertEqual(self.store.note(self.key)[1], "")
+        for method, params in (("write.begin", {"mode": "conditional", "encoding": "utf-8", "bytes": 0, "expected_version": self.empty}),
+                               ("write.chunk", {"upload": "job:1", "offset": 0, "text": "x"}),
+                               ("write.commit", {"upload": "job:1", "mode": "conditional", "expected_version": self.empty})):
+            with self.assertRaises(PluginError):
+                self.call(method, **params)
+        with self.assertRaises(PluginError) as error:
+            self.call("write.abort")
+        self.assertEqual(error.exception.code, "outcome_unknown")
+        self.call("write.begin", job="write:new", mode="conditional", encoding="utf-8", bytes=0, expected_version=self.empty)
+
+    def test_error_after_durable_note_save_reconciles_authoritative_content(self):
+        self.call("write.begin", mode="conditional", encoding="utf-8", bytes=1, expected_version=self.empty)
+        self.call("write.chunk", upload="job:1", offset=0, text="x")
+        save = self.store.save_note
+
+        def save_then_raise(*args):
+            save(*args)
+            raise sqlite3.OperationalError("Injected failure after durable commit")
+
+        with patch.object(self.store, "save_note", side_effect=save_then_raise):
+            with self.assertRaises(PluginError) as error:
+                self.call("write.commit", mode="conditional", upload="job:1", expected_version=self.empty)
+            self.assertEqual(error.exception.code, "unavailable")
+        self.assertEqual(self.plugin.notes.staging, {})
+        with self.assertRaises(PluginError) as error:
+            self.call("write.abort")
+        self.assertEqual(error.exception.code, "outcome_unknown")
+        result = self.call("reconcile", job="read:reconcile", previous_write="job:1")
+        version = result["value"]["metadata"]["version"]
+        self.assertEqual(version, hashlib.sha256(b"x").hexdigest())
+        read = self.call("read", job="read:reconcile", version=version, offset=0, limit=1)
+        self.assertEqual(read["value"]["text"], "x")
+
     def test_version_one_migration_and_import(self):
         self.plugin.close()
         with sqlite3.connect(self.path) as db:

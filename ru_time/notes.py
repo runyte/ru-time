@@ -154,13 +154,19 @@ class Notes:
             self.staging.pop(context["job"])
             self.remember(context["job"], "rejected")
             return {"kind": "write_rejected", "value": {"error": {"code": "conflict", "message": str(error)}}}
+        except sqlite3.Error:
+            # The synchronous attempt has finished. Retire its bytes so explicit
+            # reconciliation can inspect SQLite, without claiming non-commit.
+            self.staging.pop(context["job"])
+            self.remember(context["job"], "unknown")
+            raise
         self.staging.pop(context["job"])
         self.remember(context["job"], "committed")
         return {"kind": "write_committed", "value": {"version": version}}
 
     def abort(self, context):
-        if self.settled.get(context["job"]) == "committed":
-            raise PluginError("outcome_unknown", "Note already committed")
+        if self.settled.get(context["job"]) in ("committed", "unknown"):
+            raise PluginError("outcome_unknown", "Note commit cannot be undone; reconcile its outcome")
         self.staging.pop(context["job"], None)
         self.remember(context["job"], "aborted")
         return {"kind": "write_aborted", "value": {}}
