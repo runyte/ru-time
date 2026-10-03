@@ -270,6 +270,12 @@ class TimePlugin:
                 self.ensure_worker()
             except StorageError as error:
                 raise PluginError("invalid_argument", str(error)) from None
+            except sqlite3.Error:
+                raise PluginError("unavailable", "Could not save task changes; inspect storage before continuing") from None
+            finally:
+                # Pending input no longer suspends live refresh, including
+                # when validation, storage or host publication failed.
+                self.wake.set()
 
     def observed(self, event, sequence, data):
         if event == "event.resync_required":

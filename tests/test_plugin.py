@@ -136,6 +136,28 @@ class PluginTests(unittest.TestCase):
             self.submit(confirmed=True)
         self.assertEqual(len(self.plugin.store.snapshot()), 1)
 
+    def test_failed_submissions_resume_maintenance(self):
+        key = self.task()
+        for failure in ("validation", "stale", "storage", "publication"):
+            with self.subTest(failure=failure):
+                self.plugin.invoke(self.context("rename", key))
+                self.plugin.wake.clear()
+                if failure == "stale":
+                    self.plugin.store.rename(key, "Changed externally")
+                if failure == "storage":
+                    with patch.object(self.plugin.store, "rename", side_effect=sqlite3.OperationalError("disk full")):
+                        with self.assertRaises(PluginError) as refused:
+                            self.submit(value="Attempt")
+                    self.assertEqual(refused.exception.code, "unavailable")
+                else:
+                    self.host.failure = "view.publish" if failure == "publication" else None
+                    with self.assertRaises(PluginError):
+                        self.submit(value="" if failure == "validation" else "Attempt")
+                self.assertEqual(self.plugin.pending, {})
+                self.assertTrue(self.plugin.wake.is_set())
+                self.host.failure = None
+        self.assertEqual(self.plugin.store.snapshot()[0]["title"], "Attempt")
+
     def test_display_failure_does_not_undo_durable_status(self):
         key = self.task()
         self.host.failure = "view.publish"
