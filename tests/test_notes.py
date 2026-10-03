@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ru_time.plugin import TimePlugin, PluginError
 from ru_time.storage import Store, StorageError
@@ -154,6 +155,53 @@ class NotesTests(unittest.TestCase):
         self.call("write.chunk", upload="job:1", offset=0, text="x")
         self.call("write.commit", mode="conditional", upload="job:1", expected_version=self.empty)
         self.assertEqual(self.store.note(self.key)[1], "x")
+
+    def test_large_note_reads_load_storage_once_and_pin_the_version(self):
+        text = "x" * (8 * 1024 * 1024)
+        version = self.store.save_note(self.key, text, self.empty)
+        with patch.object(self.store, "note", wraps=self.store.note) as read_note:
+            self.assertEqual(self.call("stat")["value"]["bytes"], len(text))
+            self.assertEqual(read_note.call_count, 1)
+            self.store.save_note(self.key, "replacement", version)
+            read_note.reset_mock()
+            for offset in range(0, len(text), 128 * 1024):
+                value = self.call("read", version=version, offset=offset, limit=128 * 1024)["value"]
+                self.assertEqual(value["text"], text[offset:offset + 128 * 1024])
+                self.assertEqual(value["eof"], offset + 128 * 1024 == len(text))
+            self.assertEqual(read_note.call_count, 0)
+        current = self.call("stat", job="read:2")["value"]
+        self.assertNotEqual(current["version"], version)
+        self.assertEqual(self.call("read", job="read:2", version=current["version"], offset=0, limit=128)["value"]["text"], "replacement")
+
+    def test_note_read_capacity_release_and_late_requests(self):
+        self.call("stat")
+        self.call("stat", job="read:2")
+        with self.assertRaises(PluginError) as error:
+            self.call("stat", job="read:3")
+        self.assertEqual(error.exception.code, "busy")
+        self.plugin.event("resource.released", {"job": "job:1"})
+        self.assertNotIn("job:1", self.plugin.notes.reads)
+        self.call("stat", job="read:3")
+        for job in ("job:1", "not-started"):
+            self.plugin.event("resource.released", {"job": job})
+            for method, params in (("stat", {}), ("read", {"version": self.empty, "offset": 0, "limit": 1}),
+                                   ("write.begin", {"mode": "conditional", "encoding": "utf-8", "bytes": 0, "expected_version": self.empty})):
+                with self.assertRaises(PluginError):
+                    self.call(method, job=job, **params)
+            self.assertNotIn(job, self.plugin.notes.reads)
+            self.assertNotIn(job, self.plugin.notes.staging)
+        for index in range(200):
+            self.plugin.event("resource.released", {"job": f"finished:{index}"})
+        self.assertLessEqual(len(self.plugin.notes.released), 128)
+
+    def test_read_snapshot_rejects_changed_key_and_version(self):
+        self.call("stat")
+        other = self.store.add("Other")
+        with self.assertRaises(PluginError):
+            self.call("read", key=other, version=self.empty, offset=0, limit=1)
+        with self.assertRaises(PluginError) as error:
+            self.call("read", version="different", offset=0, limit=1)
+        self.assertEqual(error.exception.code, "stale")
 
     def test_version_one_migration_and_import(self):
         self.plugin.close()

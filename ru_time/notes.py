@@ -15,6 +15,8 @@ class Notes:
         self.registered = False
         self.staging = {}
         self.settled = OrderedDict()
+        self.reads = {}
+        self.released = OrderedDict()
         app.resource_handlers = {"resource." + name: self.guard(handler) for name, handler in {
             "stat": self.stat, "read": self.read, "reconcile": self.reconcile,
             "write.begin": self.begin, "write.chunk": self.chunk,
@@ -47,20 +49,46 @@ class Notes:
     def content(self, context):
         return self.storage().note(context["key"])
 
-    def metadata(self, context):
+    def snapshot(self, context):
+        job = context["job"]
+        if job in self.released:
+            raise PluginError("cancelled", "Note read was released")
+        if job in self.reads:
+            metadata, data = self.reads[job]
+            if metadata["key"] != context["key"]:
+                raise PluginError("conflict", "Note read identity changed")
+            return metadata, data
+        if len(self.reads) >= 2:
+            raise PluginError("busy", "Two note reads are already pending")
         title, text, version = self.content(context)
+        data = text.encode("utf-8")
         label = ("Note · " + title).encode("utf-8")[:157].decode("utf-8", errors="ignore")
-        return {"key": context["key"], "label": label, "syntax_hint": "markdown",
-                "version": version, "encoding": "utf-8", "bytes": len(text.encode("utf-8"))}
+        metadata = {"key": context["key"], "label": label, "syntax_hint": "markdown",
+                    "version": version, "encoding": "utf-8", "bytes": len(data)}
+        self.reads[job] = metadata, data
+        return metadata, data
+
+    def metadata(self, context):
+        return dict(self.snapshot(context)[0])
+
+    def release(self, job):
+        # This event runs on the control lane and may overtake queued reads.
+        # It releases read data only; write settlement requires commit/abort.
+        with self.lock:
+            self.reads.pop(job, None)
+            self.released[job] = None
+            self.released.move_to_end(job)
+            while len(self.released) > 128:
+                self.released.popitem(last=False)
 
     def stat(self, context):
         return {"kind": "stat", "value": self.metadata(context)}
 
     def read(self, context):
-        _, text, version = self.content(context)
+        metadata, data = self.snapshot(context)
+        version = metadata["version"]
         if context["version"] != version:
             raise PluginError("stale", "Note changed while reading")
-        data = text.encode("utf-8")
         offset, limit = context["offset"], context["limit"]
         if (type(offset) is not int or type(limit) is not int
                 or not 0 <= offset <= len(data) or not 1 <= limit <= 128 * 1024):
@@ -86,7 +114,7 @@ class Notes:
         job = context["job"]
         if context["mode"] != "conditional" or context["encoding"] != "utf-8":
             raise PluginError("invalid_argument", "Unsupported note write")
-        if job in self.staging or job in self.settled:
+        if job in self.staging or job in self.settled or job in self.released:
             raise PluginError("conflict", "Write already known")
         if len(self.staging) >= 2:
             raise PluginError("busy", "Two note saves are already staged")

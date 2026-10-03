@@ -172,18 +172,29 @@ class WireTests(unittest.TestCase):
         key = self.add("Note task")
         self.assertEqual(self.command("note", row=key)["result"], {"job": "j:g:1"})
         self.assertIn("provider.register", self.requests)
-        context = {"provider": "notes", "key": key, "job": "j:g:2"}
-        version = self.call("resource.stat", **context)["result"]["value"]["version"]
-        for job, text in [("j:g:2", "First line\n猫 second line\n"), ("j:g:3", "")]:
-            context["job"] = job
+        reading = {"provider": "notes", "key": key, "job": "j:g:2"}
+        version = self.call("resource.stat", **reading)["result"]["value"]["version"]
+        previous_text = ""
+        for index, text in enumerate(("First line\n猫 second line\n", ""), start=1):
+            job = f"j:g:{index * 2 + 1}"
+            context = {"provider": "notes", "key": key, "job": job}
             start = self.call("resource.write.begin", **context, mode="conditional", encoding="utf-8", bytes=len(text.encode()), expected_version=version)
             upload = start["result"]["value"]["upload"]
             self.call("resource.write.chunk", job=job, upload=upload, offset=0, text=text)
             result = self.call("resource.write.commit", job=job, upload=upload, mode="conditional", expected_version=version)
             self.assertEqual(result["result"]["kind"], "write_committed")
+            # A read already in flight retains its stat-time snapshot across saves.
+            old_read = self.call("resource.read", **reading, version=version, offset=0, limit=131072)
+            self.assertEqual(old_read["result"]["value"]["text"], previous_text)
+            self.send({"type": "event", "event": "resource.released", "sequence": f"e:{index}", "data": {"job": reading["job"]}})
             version = result["result"]["value"]["version"]
-            read = self.call("resource.read", **context, version=version, offset=0, limit=131072)
+            reading = {"provider": "notes", "key": key, "job": f"j:g:{index * 2 + 2}"}
+            metadata = self.call("resource.stat", **reading)["result"]["value"]
+            self.assertEqual(metadata["version"], version)
+            read = self.call("resource.read", **reading, version=version, offset=0, limit=131072)
             self.assertEqual(read["result"]["value"]["text"], text)
+            previous_text = text
+        self.send({"type": "event", "event": "resource.released", "sequence": "e:3", "data": {"job": reading["job"]}})
 
 
 if __name__ == "__main__":

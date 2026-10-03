@@ -301,7 +301,9 @@ class TimePlugin:
                 pass
 
     def event(self, name, data):
-        if name == "activity.cancel_requested":
+        if name == "resource.released":
+            self.notes.release(data["job"])
+        elif name == "activity.cancel_requested":
             lease = data["lease"]
             # Never wait for the UI lock: its owner may be waiting on a host
             # response while the lease cancellation has a two-second deadline.
