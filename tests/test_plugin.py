@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 import copy
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from ru_time.plugin import TimePlugin, PluginError, task_model
 
@@ -14,6 +16,10 @@ class Host:
         self.serial = 0
         self.models = []
         self.failure = None
+        self.disconnected = False
+
+    def _disconnect(self):
+        self.disconnected = True
 
     def request(self, method, **params):
         self.calls.append((method, params))
@@ -197,6 +203,25 @@ class PluginTests(unittest.TestCase):
         with self.assertRaises(PluginError):
             self.plugin.invoke(self.context("toggle", key))
         self.assertIsNone(self.plugin.store.active)
+
+    def test_cancellation_save_failure_retires_connection_without_release(self):
+        key = self.task()
+        self.plugin.invoke(self.context("toggle", key))
+        with patch.object(self.plugin.store, "pause", side_effect=sqlite3.OperationalError("disk full")):
+            self.plugin.event("activity.cancel_requested", {"lease": "lease:1"})
+        self.assertTrue(self.host.disconnected)
+        self.assertNotIn(("activity.release", "lease:1"), self.host.calls)
+        self.assertIsNotNone(self.plugin.store.active)
+
+    def test_background_save_failure_cannot_bypass_transport_shutdown(self):
+        key = self.task()
+        self.plugin.invoke(self.context("toggle", key))
+        self.plugin.wake.set()
+        with patch.object(self.plugin, "tick", side_effect=PluginError("unavailable", "Host failed")), \
+             patch.object(self.plugin.store, "pause", side_effect=sqlite3.OperationalError("disk full")):
+            self.plugin.background()
+        self.assertTrue(self.host.disconnected)
+        self.assertNotIn(("activity.release", "lease:1"), self.host.calls)
 
     def test_closing_view_keeps_timer_and_reopening_uses_new_view(self):
         key = self.task()

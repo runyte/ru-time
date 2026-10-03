@@ -299,12 +299,18 @@ class TimePlugin:
             lease = data["lease"]
             # Never wait for the UI lock: its owner may be waiting on a host
             # response while the lease cancellation has a two-second deadline.
-            with self.lease_lock:
-                self.cancelled.append(lease)
-                if self.lease in (None, lease):
-                    if self.store is not None:
-                        self.store.pause()
-                    self.lease = None
+            try:
+                with self.lease_lock:
+                    self.cancelled.append(lease)
+                    if self.lease in (None, lease):
+                        if self.store is not None:
+                            self.store.pause()
+                        self.lease = None
+            except (StorageError, sqlite3.Error, OSError):
+                # A rejected save cannot acknowledge a durable cancellation.
+                # Retire the connection so recovery uses the last checkpoint.
+                self.app._disconnect()
+                return
             self.app.release_activity(lease)
             self.wake.set()
         elif name == "view.closed":
@@ -355,11 +361,11 @@ class TimePlugin:
                     continue
                 # Losing the host or protection pauses time. The stored task
                 # changes remain durable even if presentation failed.
-                if self.store:
-                    self.store.pause()
                 try:
+                    if self.store:
+                        self.store.pause()
                     self.release_if_paused()
-                except PluginError:
+                except (PluginError, StorageError, sqlite3.Error, OSError):
                     pass
                 self.app._disconnect()
                 return
