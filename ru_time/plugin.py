@@ -108,11 +108,27 @@ class TimePlugin:
             # Model updates never roll back durable task changes. On a proven
             # revision refusal, read the view before the next explicit command.
             if error.code == "stale":
-                self.revision = self.app.request("view.get", view=self.view)["revision"]
+                try:
+                    self.revision = self.app.request("view.get", view=self.view)["revision"]
+                except PluginError as refresh_error:
+                    if refresh_error.code in ("closed", "not_found"):
+                        self.forget_view()
+                    raise
                 self.published = None
             elif error.code in ("closed", "not_found"):
-                self.view = self.revision = self.published = None
+                self.forget_view()
             raise
+
+    def forget_view(self):
+        """Retire local state before best-effort cleanup of host observations."""
+        self.view = self.revision = self.published = None
+        watches, self.watches = self.watches, {}
+        for subscription, _ in watches.values():
+            try:
+                self.app.unsubscribe(subscription)
+            except PluginError:
+                # The host may already have retired the view's subscriptions.
+                pass
 
     def open(self, context):
         self.storage()
@@ -123,7 +139,12 @@ class TimePlugin:
             result = self.app.request("view.create", model=model)
             self.view, self.revision, self.published = result["view"], result["revision"], model
         self.publish()
-        self.app.request("pane.show", invocation=context["invocation"], view=self.view)
+        try:
+            self.app.request("pane.show", invocation=context["invocation"], view=self.view)
+        except PluginError as error:
+            if error.code in ("closed", "not_found"):
+                self.forget_view()
+            raise
         pane = context.get("pane")
         if pane and pane not in self.watches and len(self.watches) < 16:
             result = self.app.subscribe([{"kind": "viewport", "view": self.view, "pane": pane}], self.observed)
@@ -254,15 +275,24 @@ class TimePlugin:
         if event == "event.resync_required":
             self.app.resync(data["subscription"])
             return
+        retired = []
         with self.lock:
             for item in data.get("sources", []):
                 source, state = item["source"], item["state"]
                 if source.get("view") != self.view:
                     continue
                 pane = source.get("pane")
-                if pane in self.watches:
+                if pane in self.watches and self.watches[pane][0] == data.get("subscription"):
+                    if state.get("kind") == "closed":
+                        retired.append(self.watches.pop(pane)[0])
+                        continue
                     self.watches[pane] = (self.watches[pane][0], bool(state.get("visible")))
             self.wake.set()
+        for subscription in retired:
+            try:
+                self.app.unsubscribe(subscription)
+            except PluginError:
+                pass
 
     def event(self, name, data):
         if name == "activity.cancel_requested":
@@ -281,11 +311,8 @@ class TimePlugin:
             with self.lock:
                 if data["view"] != self.view:
                     return
-                self.view = self.revision = self.published = None
-                watches, self.watches = self.watches, {}
+                self.forget_view()
                 self.pending.clear()
-            for subscription, _ in watches.values():
-                self.app.unsubscribe(subscription)
             self.wake.set()
 
     def tick(self):
