@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import copy
+from contextlib import closing
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -252,9 +253,10 @@ class NotesTests(unittest.TestCase):
 
     def test_version_one_migration_and_import(self):
         self.plugin.close()
-        with sqlite3.connect(self.path) as db:
-            db.execute("DROP TABLE notes")
-            db.execute("PRAGMA user_version=1")
+        with closing(sqlite3.connect(self.path)) as db:
+            with db:
+                db.execute("DROP TABLE notes")
+                db.execute("PRAGMA user_version=1")
         migrated = Store(self.path)
         self.addCleanup(migrated.close)
         self.assertEqual(migrated.note(self.key)[1], "")
