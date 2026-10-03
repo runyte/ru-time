@@ -26,10 +26,12 @@ class WireTests(unittest.TestCase):
         self.addCleanup(self.close)
         self.wire = JsonLineReader(self.child.stdout)
         self.validator = None
+        self.host_validator = None
         if os.environ.get("RU_TIME_VALIDATE_SCHEMA"):
             from jsonschema import Draft202012Validator
             schema = json.loads((ROOT / "tests/runyte-1.schema.json").read_text())
             self.validator = Draft202012Validator({"$defs": schema["$defs"], "$ref": "#/$defs/pluginMessage"})
+            self.host_validator = Draft202012Validator({"$defs": schema["$defs"], "$ref": "#/$defs/hostMessage"})
         self.send(HANDSHAKE[0])
         self.registration = self.receive()
         self.send(HANDSHAKE[1])
@@ -50,6 +52,8 @@ class WireTests(unittest.TestCase):
             stream.close()
 
     def send(self, message):
+        if self.host_validator:
+            self.host_validator.validate(message)
         self.child.stdin.write((json.dumps(message) + "\n").encode())
         self.child.stdin.flush()
 
@@ -77,7 +81,7 @@ class WireTests(unittest.TestCase):
         elif method in ("activity.acquire", "activity.renew"):
             result = {"lease": "a:g:1", "title": "Tracking task time", "state": "active", "duration_seconds": 600}
         elif method == "resource.open":
-            result = {"job": "j:g:1", "title": "Open note", "state": "running"}
+            result = {"job": "j:g:1", "title": "Open note", "state": "running", "progress": 0}
         elif method in ("pane.show", "activity.release", "event.unsubscribe", "provider.register"):
             result = {}
         else:
