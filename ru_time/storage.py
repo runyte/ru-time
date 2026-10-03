@@ -76,6 +76,8 @@ class Store:
         self.active = None
         self.origin = 0
         self.generation = 0
+        self._snapshot_key = None
+        self._snapshot_rows = []
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.owner = open(str(self.path) + ".lock", "a+b")
         try:
@@ -141,17 +143,23 @@ class Store:
 
     def snapshot(self):
         with self.lock:
-            rows = [dict(row) for row in self.db.execute("""
-                SELECT t.*, COALESCE(SUM(i.elapsed_ms),0) AS elapsed_ms,
-                    COALESCE(MAX(i.interrupted),0) AS interrupted
-                FROM tasks t LEFT JOIN intervals i ON i.task_id=t.id
-                GROUP BY t.id ORDER BY t.created_ms,t.rowid
-            """)]
+            key = (self.generation, self.active)
+            if key != self._snapshot_key:
+                # The live interval is added below, so checkpoints do not stale
+                # the cached totals or require scanning historical intervals.
+                active_interval = self.active[1] if self.active else None
+                self._snapshot_rows = [dict(row) for row in self.db.execute("""
+                    SELECT t.*, COALESCE(SUM(CASE WHEN i.id=? THEN 0 ELSE i.elapsed_ms END),0) AS elapsed_ms,
+                        COALESCE(MAX(i.interrupted),0) AS interrupted
+                    FROM tasks t LEFT JOIN intervals i ON i.task_id=t.id
+                    GROUP BY t.id ORDER BY t.created_ms,t.rowid
+                """, (active_interval,))]
+                self._snapshot_key = key
+            rows = [dict(row) for row in self._snapshot_rows]
             for row in rows:
                 row["running"] = self.active is not None and self.active[0] == row["id"]
                 if row["running"]:
-                    saved = self.db.execute("SELECT elapsed_ms FROM intervals WHERE id=?", (self.active[1],)).fetchone()[0]
-                    row["elapsed_ms"] += self._elapsed() - saved
+                    row["elapsed_ms"] += self._elapsed()
             return rows
 
     def add(self, title):

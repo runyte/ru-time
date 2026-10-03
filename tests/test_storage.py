@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from ru_time.storage import Store, StorageError, parse_end, utc_text, write_export
+from ru_time.storage import MAX_INTERVALS, Store, StorageError, parse_end, utc_text, write_export
 
 
 class Clock:
@@ -69,6 +69,110 @@ class StorageTests(unittest.TestCase):
         self.store.pause()
         self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], 10000)
 
+    def test_snapshot_reuses_history_and_keeps_live_time_after_checkpoint(self):
+        key = self.store.add("Live")
+        self.store.toggle(key)
+        self.clock.advance(3)
+        first = self.store.snapshot()
+        first[0]["title"] = "Changed returned copy"
+        first[0]["elapsed_ms"] = -1
+        self.clock.advance(2)
+        self.store.checkpoint()
+        statements = []
+        self.store.db.set_trace_callback(statements.append)
+        try:
+            self.clock.advance(5)
+            row = self.store.snapshot()[0]
+            self.assertEqual(row["title"], "Live")
+            self.assertEqual(row["elapsed_ms"], 10000)
+            self.assertTrue(row["running"])
+            self.assertEqual(statements, [])
+        finally:
+            self.store.db.set_trace_callback(None)
+        self.store.pause()
+        self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], 10000)
+
+    def test_snapshot_invalidates_after_mutations_and_empty_import(self):
+        self.assertEqual(self.store.snapshot(), [])
+        key = self.store.add("Initial")
+        self.assertEqual(self.store.snapshot()[0]["title"], "Initial")
+        self.store.rename(key, "Renamed")
+        self.assertEqual(self.store.snapshot()[0]["title"], "Renamed")
+        self.store.status(key, "done")
+        self.assertEqual(self.store.snapshot()[0]["status"], "done")
+        exported = self.store.export_data()
+        self.store.delete(key)
+        self.assertEqual(self.store.snapshot(), [])
+        self.store.import_data(exported)
+        self.assertEqual(self.store.snapshot()[0]["title"], "Renamed")
+
+    def test_failed_switch_commit_preserves_active_timer_and_snapshot(self):
+        first, second = self.store.add("First"), self.store.add("Second")
+        self.store.toggle(first)
+        self.clock.advance(3)
+        self.store.checkpoint()
+        self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], 3000)
+        active = self.store.active
+        def reject_commit(action, argument, *_):
+            return (sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_TRANSACTION
+                    and argument == "COMMIT" else sqlite3.SQLITE_OK)
+        self.store.db.set_authorizer(reject_commit)
+        try:
+            self.clock.advance(4)
+            with self.assertRaises(sqlite3.DatabaseError):
+                self.store.toggle(second)
+        finally:
+            self.store.db.set_authorizer(None)
+        self.assertEqual(self.store.active, active)
+        rows = self.store.snapshot()
+        self.assertEqual([r["elapsed_ms"] for r in rows], [7000, 0])
+        self.assertEqual([r["running"] for r in rows], [True, False])
+        intervals = self.store.export_data()["intervals"]
+        self.assertEqual(len(intervals), 1)
+        self.assertIsNone(intervals[0]["end_ms"])
+
+    def test_failed_mutation_commits_preserve_cached_and_durable_tasks(self):
+        key = self.store.add("Preserved")
+        expected = self.store.snapshot()
+        data = self.store.export_data()
+        def reject_commit(action, argument, *_):
+            return (sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_TRANSACTION
+                    and argument == "COMMIT" else sqlite3.SQLITE_OK)
+        for operation in (lambda: self.store.add("Rejected"),
+                          lambda: self.store.rename(key, "Rejected"),
+                          lambda: self.store.status(key, "done"),
+                          lambda: self.store.delete(key)):
+            self.store.db.set_authorizer(reject_commit)
+            try:
+                with self.assertRaises(sqlite3.DatabaseError):
+                    operation()
+            finally:
+                self.store.db.set_authorizer(None)
+            self.assertEqual(self.store.snapshot(), expected)
+            self.assertEqual(self.store.export_data(), data)
+
+    def test_snapshot_and_timer_limit_with_maximum_interval_history(self):
+        key = self.store.add("History")
+        now = self.store.now()
+        with self.store.db:
+            self.store.db.executemany("INSERT INTO intervals VALUES (?,?,?,?,?,?,?)",
+                ((f"{i:032x}", key, now, now, 1000, now, 0) for i in range(MAX_INTERVALS - 1)))
+        self.store.toggle(key)
+        self.clock.advance(2)
+        self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], (MAX_INTERVALS - 1) * 1000 + 2000)
+        statements = []
+        self.store.db.set_trace_callback(statements.append)
+        try:
+            self.clock.advance(3)
+            self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], (MAX_INTERVALS - 1) * 1000 + 5000)
+            self.assertEqual(statements, [])
+        finally:
+            self.store.db.set_trace_callback(None)
+        self.assertFalse(self.store.toggle(key))  # Pausing is allowed at the limit.
+        with self.assertRaises(StorageError):
+            self.store.toggle(key)
+        self.assertEqual(self.store.snapshot()[0]["elapsed_ms"], (MAX_INTERVALS - 1) * 1000 + 5000)
+
     def test_crash_recovery_keeps_checkpoint_and_never_counts_downtime(self):
         key = self.store.add("Interrupted")
         self.store.toggle(key)
@@ -96,11 +200,13 @@ class StorageTests(unittest.TestCase):
         self.store.close(interrupted=True)
         reopened = self.open(self.store.path)
         interval = reopened.interrupted(key)["id"]
+        self.assertTrue(reopened.snapshot()[0]["interrupted"])
         for end in (start - 1, start + 101000):
             with self.assertRaises(StorageError):
                 reopened.recover(interval, end)
         reopened.recover(interval, start + 50000)
         self.assertEqual(reopened.snapshot()[0]["elapsed_ms"], 50000)
+        self.assertFalse(reopened.snapshot()[0]["interrupted"])
 
     def test_second_owner_refused_and_lock_released_on_close(self):
         with self.assertRaises(StorageError):
