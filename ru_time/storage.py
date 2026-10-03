@@ -355,7 +355,8 @@ def load_export(path):
 
 def write_export(path, data):
     """Publish a complete private export without replacing an existing file."""
-    destination = Path(path).expanduser().resolve()
+    destination = Path(path).expanduser()
+    destination = destination.parent.resolve() / destination.name
     descriptor, temporary = tempfile.mkstemp(prefix=".ru-time-export-", dir=destination.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

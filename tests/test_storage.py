@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from ru_time.storage import Store, StorageError, parse_end, utc_text
+from ru_time.storage import Store, StorageError, parse_end, utc_text, write_export
 
 
 class Clock:
@@ -195,6 +195,17 @@ class StorageTests(unittest.TestCase):
         other.import_data(self.store.export_data())
         self.assertTrue(other.snapshot()[0]["interrupted"])
         self.assertIsNone(other.active)
+
+    def test_export_refuses_existing_dangling_symlink(self):
+        destination = Path(self.tmp.name) / "existing.json"
+        target = Path(self.tmp.name) / "missing.json"
+        destination.symlink_to(target.name)
+        with self.assertRaises(FileExistsError):
+            write_export(destination, self.store.export_data())
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.readlink(), Path(target.name))
+        self.assertFalse(target.exists())
+        self.assertEqual(list(Path(self.tmp.name).glob(".ru-time-export-*")), [])
 
     def test_timestamp_roundtrip_and_timezone_required(self):
         value = 1_800_000_000_000
