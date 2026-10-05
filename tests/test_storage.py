@@ -26,6 +26,11 @@ def reject_commit(action, argument, *_):
             and argument == "COMMIT" else sqlite3.SQLITE_OK)
 
 
+def allow_all(*_):
+    # Python 3.10 cannot disable an authorizer by passing None.
+    return sqlite3.SQLITE_OK
+
+
 class StorageTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -128,7 +133,7 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(sqlite3.DatabaseError):
                 self.store.toggle(second)
         finally:
-            self.store.db.set_authorizer(None)
+            self.store.db.set_authorizer(allow_all)
         self.assertEqual(self.store.active, active)
         rows = self.store.snapshot()
         self.assertEqual([r["elapsed_ms"] for r in rows], [7000, 0])
@@ -150,7 +155,7 @@ class StorageTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.DatabaseError):
                     operation()
             finally:
-                self.store.db.set_authorizer(None)
+                self.store.db.set_authorizer(allow_all)
             self.assertEqual(self.store.snapshot(), expected)
             self.assertEqual(self.store.export_data(), data)
 
@@ -169,7 +174,7 @@ class StorageTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.DatabaseError):
                     operation()
             finally:
-                self.store.db.set_authorizer(None)
+                self.store.db.set_authorizer(allow_all)
             self.assertEqual(self.store.active, active)
             row = self.store.snapshot()[0]
             self.assertTrue(row["running"])
@@ -259,7 +264,7 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(sqlite3.DatabaseError):
                 self.store.save_note(key, "Rejected", version)
         finally:
-            self.store.db.set_authorizer(None)
+            self.store.db.set_authorizer(allow_all)
         self.assertEqual(self.store.note(key)[1:], ("Preserved", version))
         self.store.save_note(key, "Accepted", version)
         self.assertEqual(self.store.note(key)[1], "Accepted")
@@ -423,7 +428,7 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(sqlite3.DatabaseError):
                 other.import_data(data)
         finally:
-            other.db.set_authorizer(None)
+            other.db.set_authorizer(allow_all)
         self.assertEqual(other.export_data(), {"version": 2, "tasks": [], "intervals": [], "notes": []})
         self.assertEqual(other.snapshot(), [])
         other.import_data(data)
@@ -447,7 +452,7 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(sqlite3.DatabaseError):
                 other.recover(interval, now)
         finally:
-            other.db.set_authorizer(None)
+            other.db.set_authorizer(allow_all)
         self.assertEqual(other.snapshot(), expected)
         self.assertEqual(other.interrupted(key)["id"], interval)
         other.recover(interval, now)
