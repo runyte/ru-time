@@ -14,9 +14,9 @@ Source: https://github.com/runyte/runyte/tree/3fa28b0bf6bb418027265413745080505d
 | `tests/runyte-1.schema.json` | `runyte-1.schema.json` | `4ed166f3ba4f062cd84a08304ffbd3d6ccf6c27ece6a262cabd127e1e84adf9e` |
 | `tests/ranges.json` | `compatibility/ranges.json` | `9b356c1d681e0220f90be0f07a88460786c50a2d8f79c911849398ee74f997ff` |
 
-This is the first stable candidate source, not a published 0.3.0 release.
-The native host inventory in `tests/runyte-hosts.json` records its honest
-0.3.0 bootstrap construction and is independent of SDK provenance.
+This SDK source predates the 0.4 host line. The native host inventory in
+`tests/runyte-hosts.json` records the 0.4.0 candidate construction separately;
+it is independent of SDK provenance and is not a published release.
 Source pins must be pushed and independently fetchable before CI/release acceptance.
 
 License: MPL-2.0, retained in the client header and this repository's LICENSE.

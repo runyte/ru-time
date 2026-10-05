@@ -72,7 +72,7 @@ jobs:
         run: test "$(git -C runyte rev-parse HEAD)" = "$EXPECTED_REVISION"
       - name: Prepare the declared host
         id: candidate
-        run: python runyte/docs/plugins/compatibility/candidate.py --source runyte --destination "$RUNNER_TEMP/runyte-candidate" --github-output "$GITHUB_OUTPUT"
+        run: python runyte/docs/plugins/compatibility/candidate.py --source runyte --candidate-version 0.4.0 --destination "$RUNNER_TEMP/runyte-candidate" --github-output "$GITHUB_OUTPUT"
       - name: Verify host construction
         env:
           ACTUAL_VERSION: ${{ steps.candidate.outputs.host_version }}

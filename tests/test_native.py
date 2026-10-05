@@ -123,13 +123,20 @@ class NativeEditor:
         (self.root / "home").mkdir()
         self.output = bytearray()
         self.child = self.master = self.screen = None
+        self.initialized = False
 
     def attach(self):
         self.test.assertIsNone(self.master)
+        if not self.initialized:
+            subprocess.run([os.environ["RUNYTE_BIN"], "--config", str(self.config),
+                            "--init", str(self.project)], cwd=self.project,
+                           env=self.environment, capture_output=True, text=True,
+                           check=True, timeout=10)
+            self.initialized = True
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 110, 0, 0))
         arguments = [os.environ["RUNYTE_BIN"], "--config", str(self.config),
-                     "--persistent" if self.persistent else "--init", str(self.project)]
+                     "--mux" if self.persistent else "--ide", str(self.project)]
         try:
             self.child = subprocess.Popen(arguments, cwd=self.project, env=self.environment,
                                           stdin=slave, stdout=slave, stderr=slave, start_new_session=True)

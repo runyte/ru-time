@@ -45,8 +45,9 @@ def load(path=None):
             raise ValueError('Acceptance host lies outside the authored support range')
         if host['mode'] not in ('exact', 'bootstrap-candidate'):
             raise ValueError('Invalid host construction mode')
-        if host['mode'] == 'bootstrap-candidate' and (host['host_version'] != '0.3.0' or len(hosts) != 1):
-            raise ValueError('Only the first stable floor may use bootstrap construction')
+        if host['mode'] == 'bootstrap-candidate' and (
+                len(hosts) != 1 or ReleaseRange('=' + host['host_version'].split('+', 1)[0]).first != support.first):
+            raise ValueError('Only the supported floor may use bootstrap construction')
         if not isinstance(host['roles'], list) or not host['roles'] or any(role not in ('oldest', 'newest') for role in host['roles']):
             raise ValueError('Invalid host acceptance roles')
         roles += host['roles']

@@ -45,7 +45,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_shipped_plugin_refuses_unsupported_host_releases_before_registration(self):
         hello = json.loads((ROOT / "tests/host_handshake.json").read_text())[0]
-        for host in ("0.2.99", "0.4.0", "1.0.0", "0.3.0-rc.1"):
+        for host in ("0.3.6", "0.5.0", "1.0.0", "0.4.0-rc.1"):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
                 database = Path(directory) / "tasks.sqlite3"
                 result = subprocess.run([sys.executable, str(ROOT / "time_plugin.py"), "--database", str(database)],

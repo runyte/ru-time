@@ -25,7 +25,7 @@ class HostInventoryTests(unittest.TestCase):
         self.first = hashlib.sha1(b'offline-host-floor-fixture').hexdigest()
         self.second = hashlib.sha1(b'offline-host-newest-fixture').hexdigest()
         self.base = {'version': 1, 'hosts': [{
-            'revision': self.first, 'host_version': '0.3.0',
+            'revision': self.first, 'host_version': '0.4.0',
             'mode': 'bootstrap-candidate', 'roles': ['oldest', 'newest'],
         }]}
 
@@ -39,12 +39,12 @@ class HostInventoryTests(unittest.TestCase):
         self.assertEqual({row['revision'] for row in rows}, {self.first})
         self.assertTrue(all(row['mode'] == 'bootstrap-candidate' for row in rows))
         value = {'version': 1, 'hosts': [
-            {'revision': self.first, 'host_version': '0.3.0+build.7', 'mode': 'exact', 'roles': ['oldest']},
-            {'revision': self.second, 'host_version': '0.3.1', 'mode': 'exact', 'roles': ['newest']},
+            {'revision': self.first, 'host_version': '0.4.0+build.7', 'mode': 'exact', 'roles': ['oldest']},
+            {'revision': self.second, 'host_version': '0.4.1', 'mode': 'exact', 'roles': ['newest']},
         ]}
         rows = check_hosts.matrix(self.load(value))['include']
         self.assertEqual([(row['host_version'], row['python']) for row in rows],
-                         [('0.3.0+build.7', '3.10'), ('0.3.0+build.7', '3.14'), ('0.3.1', '3.14')])
+                         [('0.4.0+build.7', '3.10'), ('0.4.0+build.7', '3.14'), ('0.4.1', '3.14')])
 
     def test_missing_malformed_floating_and_duplicate_source_pins_fail(self):
         for mutate in (
@@ -65,10 +65,10 @@ class HostInventoryTests(unittest.TestCase):
 
     def test_floor_roles_ranges_and_bootstrap_modes_cannot_weaken_acceptance(self):
         for updates in (
-            {'host_version': '0.3.1', 'mode': 'exact'},
-            {'host_version': '0.2.99', 'mode': 'exact'},
-            {'host_version': '0.4.0', 'mode': 'exact'},
-            {'host_version': '0.3.0-rc.1', 'mode': 'exact'},
+            {'host_version': '0.4.1', 'mode': 'exact'},
+            {'host_version': '0.3.99', 'mode': 'exact'},
+            {'host_version': '0.5.0', 'mode': 'exact'},
+            {'host_version': '0.4.0-rc.1', 'mode': 'exact'},
             {'roles': ['newest']},
             {'roles': ['oldest', 'oldest']},
             {'roles': ['convenient']},
@@ -80,7 +80,7 @@ class HostInventoryTests(unittest.TestCase):
                 self.load(value)
         value = copy.deepcopy(self.base)
         value['hosts'][0]['roles'] = ['oldest']
-        value['hosts'].append({'revision': self.second, 'host_version': '0.3.1', 'mode': 'exact', 'roles': ['newest']})
+        value['hosts'].append({'revision': self.second, 'host_version': '0.4.1', 'mode': 'exact', 'roles': ['newest']})
         with self.assertRaisesRegex(ValueError, 'bootstrap'):
             self.load(value)
 
